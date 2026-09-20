@@ -87,7 +87,7 @@
     "git": ["git", "version control", "gitflow", "rebase", "merge conflict"],
     "security": ["security", "cybersecurity", "vulnerability", "vulnerabilities", "cve", "exploit", "malware", "ransomware", "phishing", "encryption", "penetration testing", "pentest", "owasp", "zero day"],
     "privacy": ["privacy", "tracking", "gdpr", "surveillance", "anonymity", "vpn"],
-    "networking": ["networking", "tcp", "dns", "subnet", "router", "firewall", "wifi", "wi-fi", "ethernet", "network"],
+    "networking": ["networking", "tcp", "dns", "subnet", "router", "firewall", "wifi", "wi-fi", "ethernet"],
     "ai": ["artificial intelligence", "ai", "generative ai", "genai", "chatgpt", "openai"],
     "llm": ["llm", "llms", "large language model", "large language models", "ollama", "llama", "prompt engineering", "rag", "retrieval augmented"],
     "machine-learning": ["machine learning", "ml", "deep learning", "neural network", "neural networks", "tensorflow", "pytorch", "scikit-learn", "training data", "transformer", "transformers"],
@@ -117,7 +117,7 @@
     "politics": ["politics", "election", "elections", "parliament", "senate", "democracy", "legislation"], "law": ["law", "legal", "lawyer", "attorney", "lawsuit", "copyright", "patent", "trademark"],
     "sports": ["sports", "football", "soccer", "basketball", "baseball", "tennis", "nba", "nfl", "olympics"], "cars": ["automotive", "electric vehicle", "horsepower", "dealership"], "diy": ["diy", "do it yourself", "woodworking", "home improvement", "renovation", "carpentry"],
     "gardening": ["gardening", "garden", "houseplants", "compost", "vegetable garden"], "pets": ["dog", "dogs", "cat", "cats", "puppy", "kitten", "veterinarian"], "parenting": ["parenting", "toddler", "pregnancy"], "fashion": ["fashion", "clothing", "outfit", "sneakers", "streetwear"], "interior-design": ["interior design", "home decor", "furniture"],
-    "art": ["artist", "painting", "illustration", "sculpture", "gallery", "museum"], "writing": ["writing", "storytelling", "grammar", "essay", "publishing"], "languages": ["language learning", "vocabulary", "spanish", "french", "german", "japanese", "duolingo", "translation"],
+    "art": ["artist", "painting", "illustration", "sculpture", "gallery", "museum"], "writing": ["creative writing", "storytelling", "grammar", "essay", "publishing"], "languages": ["language learning", "vocabulary", "spanish", "french", "german", "japanese", "duolingo", "translation"],
     "humor": ["funny", "humor", "humour", "meme", "memes", "comedy", "satire"], "shopping": ["shopping", "discount", "coupon", "promo code", "price comparison", "buying guide"], "tools": ["online tool", "converter", "calculator", "generator", "validator", "formatter", "minifier"]
   }
 }

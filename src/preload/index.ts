@@ -67,6 +67,9 @@ const api: CairnApi = {
       applyAll: () => invoke('tagging:review:applyAll'),
       discardAll: () => invoke('tagging:review:discardAll')
     },
+    ollama: {
+      status: (overrides) => invoke('tagging:ollama:status', overrides)
+    },
     runs: {
       last: () => invoke('tagging:runs:last'),
       undo: (runId) => invoke('tagging:runs:undo', runId),

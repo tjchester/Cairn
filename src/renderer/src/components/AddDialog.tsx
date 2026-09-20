@@ -75,37 +75,63 @@ export function AddDialog({ initialUrls }: { initialUrls?: string[] }): React.JS
     }
   }, [normalized])
 
-  // Suggest tags once the page details have been looked up (the built-in engine answers in milliseconds).
+  // Suggest tags once the page details have been looked up. The built-in engine answers in milliseconds; if the
+  // local model is switched on it is asked afterwards (a few seconds) and its merged answer replaces the list.
+  const [modelBusy, setModelBusy] = useState(false)
+  const [modelNote, setModelNote] = useState<string | null>(null)
   useEffect(() => {
+    setModelNote(null)
     if (!normalized || tagging.mode === 'off' || metaState === 'loading' || bulk.length > 1) {
       setSuggestions([])
       return
     }
     let cancelled = false
+    const draft = { url: normalized, title: meta?.title || title, excerpt: meta?.excerpt ?? '', signals: meta?.signals ?? null, tags }
+
+    // In Auto mode, suggestions are added to the tag field (marked as automatic) until the user edits it.
+    const autoApply = (list: TagSuggestion[]): void => {
+      if (tagging.mode !== 'auto' || tagsTouched.current) return
+      const have = new Set(tags.map((t) => t.toLowerCase()))
+      setAutoSources((current) => {
+        const fresh = list.filter((sg) => !have.has(sg.tag.toLowerCase()) && !current[sg.tag])
+        if (fresh.length === 0) return current
+        setTags((existing) => [...existing, ...fresh.filter((sg) => !existing.some((t) => t.toLowerCase() === sg.tag.toLowerCase())).map((sg) => sg.tag)])
+        return { ...current, ...Object.fromEntries(fresh.map((sg) => [sg.tag, sg.origin])) }
+      })
+    }
+
     const timer = setTimeout(() => {
       api.tagging
-        .suggest({ draft: { url: normalized, title: meta?.title || title, excerpt: meta?.excerpt ?? '', signals: meta?.signals ?? null, tags } }, false)
+        .suggest({ draft }, false)
         .then((result) => {
           if (cancelled) return
           setSuggestions(result.suggestions)
-          if (tagging.mode === 'auto' && !tagsTouched.current) {
-            const have = new Set(tags.map((t) => t.toLowerCase()))
-            const fresh = result.suggestions.filter((sg) => !have.has(sg.tag.toLowerCase()))
-            if (fresh.length > 0) {
-              setTags((current) => [...current, ...fresh.map((sg) => sg.tag)])
-              setAutoSources((current) => ({ ...current, ...Object.fromEntries(fresh.map((sg) => [sg.tag, sg.origin])) }))
-            }
-          }
+          autoApply(result.suggestions)
+          if (!tagging.llm.enabled || !tagging.llm.model) return
+          setModelBusy(true)
+          return api.tagging
+            .suggest({ draft }, true)
+            .then((withModel) => {
+              if (cancelled) return
+              if (withModel.llm === 'used') {
+                setSuggestions(withModel.suggestions)
+                autoApply(withModel.suggestions)
+              } else if (withModel.llm === 'failed') {
+                setModelNote('Local model unavailable: ' + (withModel.error ?? 'unknown error'))
+              }
+            })
+            .finally(() => !cancelled && setModelBusy(false))
         })
         .catch(() => undefined)
     }, 250)
     return () => {
       cancelled = true
       clearTimeout(timer)
+      setModelBusy(false)
     }
     // Only the page (not each keystroke in the title or tags) should trigger a new suggestion.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [normalized, meta, metaState, tagging.mode, bulk.length])
+  }, [normalized, meta, metaState, tagging.mode, tagging.llm.enabled, tagging.llm.model, bulk.length])
 
   const onPaste = (e: React.ClipboardEvent): void => {
     const found = extractUrls(e.clipboardData.getData('text'))
@@ -251,6 +277,8 @@ export function AddDialog({ initialUrls }: { initialUrls?: string[] }): React.JS
             <TagSuggestions
               suggestions={suggestions}
               taken={tags}
+              busy={modelBusy ? 'Asking ' + tagging.llm.model + '…' : null}
+              status={modelNote}
               onPick={(pick) => {
                 tagsTouched.current = true
                 setTags((current) => [...current, pick.tag])

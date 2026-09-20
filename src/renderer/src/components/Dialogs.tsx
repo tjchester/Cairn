@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { Bookmark, JobKind, StartJobOptions, TagRunInfo, TaggingMode, ThemeSetting } from '@shared/types'
+import type { Bookmark, JobKind, LlmSettings, OllamaStatus, StartJobOptions, TagRunInfo, TaggingMode, ThemeSetting } from '@shared/types'
 import { Icon } from '../icons'
 import { useStore } from '../store'
 import { formatDate } from '../util'
@@ -140,7 +140,115 @@ function AutoTaggingSettings(): React.JSX.Element {
           aria-label="Custom tagging rules"
         />
       </details>
+
+      <LocalModelSettings />
     </section>
+  )
+}
+
+/** Optional: a local Ollama model that improves suggestions. Off by default; nothing is sent anywhere until enabled. */
+function LocalModelSettings(): React.JSX.Element {
+  const s = useStore()
+  const llm = s.settings.tagging.llm
+  const [address, setAddress] = useState(llm.baseUrl)
+  const [instructions, setInstructions] = useState(llm.instructions)
+  const [status, setStatus] = useState<OllamaStatus | null>(null)
+  const [checking, setChecking] = useState(false)
+
+  const check = async (overrides: Partial<LlmSettings> = {}): Promise<void> => {
+    setChecking(true)
+    try {
+      setStatus(await api.tagging.ollama.status(overrides))
+    } finally {
+      setChecking(false)
+    }
+  }
+  const save = (patch: Partial<LlmSettings>): Promise<void> => s.updateSettings({ tagging: { llm: patch } })
+
+  // Look up the installed models (and whether the chosen one is ready) whenever the model is switched on or its
+  // address or model changes.
+  useEffect(() => {
+    if (llm.enabled) void check()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [llm.enabled, llm.baseUrl, llm.allowRemote, llm.model])
+
+  const models = status?.models ?? []
+  const choices = llm.model && !models.includes(llm.model) ? [llm.model, ...models] : models
+
+  return (
+    <div className="llm-settings">
+      <h4>
+        <Icon name="sparkles" size={14} /> Local AI model (optional)
+      </h4>
+      <label className="check">
+        <input type="checkbox" checked={llm.enabled} onChange={(e) => void save({ enabled: e.target.checked })} />
+        <span>Use a local model through Ollama to improve suggestions</span>
+      </label>
+      <p className="muted settings-note">
+        {llm.allowRemote
+          ? 'Bookmark titles, links and descriptions are sent to the server below. Private notes are never sent.'
+          : 'Runs on this computer: bookmark titles, links and descriptions go to your own Ollama, nothing else leaves it. Private notes are never sent.'}
+      </p>
+
+      {llm.enabled && (
+        <>
+          <label className="field">
+            <span>Ollama address</span>
+            <input
+              value={address}
+              spellCheck={false}
+              onChange={(e) => setAddress(e.target.value)}
+              onBlur={() => address.trim() !== llm.baseUrl && void save({ baseUrl: address.trim() })}
+              aria-label="Ollama address"
+            />
+          </label>
+
+          <label className="field">
+            <span>Model</span>
+            <select value={llm.model} onChange={(e) => void save({ model: e.target.value })} aria-label="Model">
+              <option value="">{choices.length === 0 ? 'No models found' : 'Choose a model…'}</option>
+              {choices.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="button-row">
+            <button className="btn" disabled={checking} onClick={() => void check({ baseUrl: address.trim(), model: llm.model })}>
+              <Icon name="refresh" /> {checking ? 'Checking…' : 'Test connection'}
+            </button>
+            {status && (
+              <span className={'llm-status' + (status.ok && (status.modelReady || !llm.model) ? ' ok' : ' bad')} role="status">
+                <Icon name={status.ok && (status.modelReady || !llm.model) ? 'ok' : 'warning'} size={14} /> {status.message}
+              </span>
+            )}
+          </div>
+
+          <label className="check">
+            <input type="checkbox" checked={llm.sendPageText} onChange={(e) => void save({ sendPageText: e.target.checked })} />
+            <span>Also send the first part of each page&apos;s text (more accurate, but sends more of the page)</span>
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={llm.allowRemote} onChange={(e) => void save({ allowRemote: e.target.checked })} />
+            <span>Allow a server on another computer (its address is then trusted with your bookmark titles and links)</span>
+          </label>
+
+          <label className="field">
+            <span>Extra instructions (optional)</span>
+            <textarea
+              rows={2}
+              value={instructions}
+              placeholder="e.g. Prefer broad topics over product names."
+              onChange={(e) => setInstructions(e.target.value)}
+              onBlur={() => instructions !== llm.instructions && void save({ instructions })}
+              aria-label="Extra instructions for the model"
+            />
+          </label>
+        </>
+      )}
+    </div>
   )
 }
 
@@ -248,6 +356,8 @@ function JobPanel({
 function AutoTagPanel(): React.JSX.Element {
   const s = useStore()
   const [lastRun, setLastRun] = useState<TagRunInfo | null>(null)
+  const [useModel, setUseModel] = useState(false)
+  const modelReady = s.settings.tagging.llm.enabled && s.settings.tagging.llm.model !== ''
   const jobKey = s.job ? s.job.id + ':' + s.job.finished : ''
   useEffect(() => void api.tagging.runs.last().then(setLastRun), [jobKey, s.pendingProposals])
   const mode = s.settings.tagging.mode
@@ -282,7 +392,13 @@ function AutoTagPanel(): React.JSX.Element {
   }
 
   return (
-    <JobPanel kind="auto-tag" title="Auto-tag bookmarks" description={description} actionLabel="Auto-tag untagged bookmarks" options={{ scope: 'untagged' }} disabled={mode === 'off'}>
+    <JobPanel kind="auto-tag" title="Auto-tag bookmarks" description={description} actionLabel="Auto-tag untagged bookmarks" options={{ scope: 'untagged', useLlm: modelReady && useModel }} disabled={mode === 'off'}>
+      {modelReady && mode !== 'off' && (
+        <label className="check">
+          <input type="checkbox" checked={useModel} onChange={(e) => setUseModel(e.target.checked)} />
+          <span>Also use the local model ({s.settings.tagging.llm.model}): slower, expect a few seconds per bookmark, and it can be stopped and resumed</span>
+        </label>
+      )}
       <div className="button-row auto-tag-extra">
         <button
           className="btn"
@@ -293,7 +409,7 @@ function AutoTagPanel(): React.JSX.Element {
               message: 'This includes bookmarks that already have tags. Tags they have are kept; new ones are ' + (mode === 'auto' ? 'added' : 'suggested for review') + '.',
               confirmLabel: 'Auto-tag all'
             })
-            if (yes) await s.startJob('auto-tag', { scope: 'all' })
+            if (yes) await s.startJob('auto-tag', { scope: 'all', useLlm: modelReady && useModel })
           }}
         >
           Auto-tag all bookmarks

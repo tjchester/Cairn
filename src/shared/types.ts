@@ -160,6 +160,17 @@ export interface SuggestResult {
   error?: string
 }
 
+/** The result of checking a connection to Ollama. */
+export interface OllamaStatus {
+  ok: boolean
+  version?: string
+  /** Names of the installed models. */
+  models: string[]
+  /** The configured model is installed. */
+  modelReady: boolean
+  message: string
+}
+
 export type TaggingMode = 'off' | 'suggest' | 'auto'
 
 export interface LlmSettings {
@@ -347,6 +358,10 @@ export interface CairnApi {
       never(tag: string): Promise<number>
       applyAll(): Promise<number>
       discardAll(): Promise<number>
+    }
+    ollama: {
+      /** Checks the connection and the model; `overrides` lets Settings test values that are not saved yet. */
+      status(overrides?: Partial<LlmSettings>): Promise<OllamaStatus>
     }
     runs: {
       /** The latest auto-tagging run that added tags and has not been undone. */

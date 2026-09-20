@@ -10,6 +10,7 @@ Raindrop.io. It shares no code or assets with them and is not affiliated with an
 
 - **Collections** – nested, colorable, drag-and-drop to reorganize; deleting one sends its bookmarks to the Trash.
 - **Tags** – autocomplete, rename/merge/delete, drag bookmarks onto a tag to apply it.
+- **Auto-tagging** – built-in and offline, with an optional local model (see *Auto-tagging* below).
 - **Three layouts** – list, grid and headlines; sort by date added/updated, title or website.
 - **Powerful search** – instant, substring matching across title, URL, note, description and tags, with operators:
 
@@ -47,7 +48,7 @@ npm run dev          # start with hot reload
 | `npm run dev` | Run the app with hot reload |
 | `npm run build` | Production build into `out/` |
 | `npm start` | Preview the production build |
-| `npm test` | Unit tests (database, search, import/export, network code, licensing) |
+| `npm test` | Unit tests (database, search, import/export, network code, tagging, local-model client, licensing) |
 | `npm run test:e2e` | Builds, then drives the real Electron app with Playwright and saves screenshots to `tests/e2e/screenshots/` |
 | `npm run typecheck` | TypeScript checks for main + renderer |
 | `npm run dist` / `dist:win` / `dist:mac` / `dist:linux` | Package installers into `dist/` (build each OS on that OS) |
@@ -112,10 +113,64 @@ Visiting thousands of sites is where things go wrong, so the jobs are built to c
 - **"Broken" means broken** – only a 404/410-style answer, or a host that doesn't exist / refuses connections on every
   attempt *while the internet is confirmed to be working*. Timeouts, TLS problems and rate limits never mark a link broken.
 
+## Auto-tagging
+
+Cairn can suggest tags for a bookmark. It works with any library: nothing is tuned to one person's bookmarks.
+
+**Built-in engine (always available, offline, instant).** It combines evidence and scores it:
+
+- the website (a table of well-known domains), the kind of site from its host or path (`docs.`, `/recipe/`), file extensions,
+  and the page type (`og:type`);
+- keywords the author published (`article:tag`, JSON-LD, `<meta name="keywords">`); free-form ones count only if they also
+  appear in the title or description;
+- a topic dictionary with synonyms (`k8s` → `kubernetes`, `ML` → `machine-learning`…);
+- **your own tags**: a tag you already use that appears in the title, description or page text is preferred, and suggestions
+  are written in *your* spelling (if you use `JS`, you get `JS`, not `javascript`).
+
+Suggestions below a score of 0.45, tags the bookmark already has, tags you told it never to suggest, and workflow tags are
+dropped. New tags are lower-case with hyphens. English stop-words only.
+
+**Modes** (*Settings → Auto-tagging*):
+
+| Mode | What happens |
+| --- | --- |
+| Off | nothing |
+| **Suggest** (default) | chips appear in the *New bookmark* and editor dialogs; bulk runs and imports queue suggestions in *Tools → Review suggested tags* |
+| Auto | tags are added on their own, styled as automatic, and each run can be undone |
+
+Tools has an *Auto-tag bookmarks* panel, a review screen grouped by tag (accept, reject, or "never suggest this"),
+*Undo last run*, and *Remove all automatic tags*. Tags you typed yourself are never touched. After *Fetch missing
+details*, bookmarks with no tags get suggestions from what was just learned. You can add your own domain and keyword rules
+as JSON in Settings.
+
+**Optional local model (Ollama).** Off by default. Turn on *Settings → Local model*, pick one of the models Ollama has
+installed, and Cairn asks it to classify a bookmark as a second opinion; the model's tags go through the same
+mapping onto your tags, blocklist and limits, and tags both sources agree on rank higher.
+
+- **Privacy** – the address must be on your own computer (`localhost`, `127.0.0.1`, `::1`) unless you tick the explicit
+  consent box (*Allow a server on another computer*). Only the title, URL and description are sent. Page text is sent only if you opt in. Your notes
+  are never sent. The address may not contain credentials, and redirects are refused.
+- **Untrusted pages** – page text is treated as data; the model is told never to follow instructions in it. That is not
+  bulletproof, so a page that looks like it is trying to instruct the model (`ignore previous instructions…`) is not sent
+  to it at all, and model suggestions always go through your review in *Suggest* mode.
+- **Speed** – with `qwen2.5:7b` on a CPU-only computer, about 3 seconds per bookmark after the first (which loads the model).
+  The bulk *use local model* run can be cancelled and resumed; bookmarks that already have suggestions are skipped. If the
+  model stops answering, the run finishes with the built-in engine.
+- Recommended model: **`qwen2.5:7b`** (`ollama pull qwen2.5:7b`). `gemma3:12b` gave similar quality but was about six times
+  slower on the same computer; `qwen2.5:3b` is a faster choice for very large libraries.
+
+### Data notes
+
+Auto-tagging needs a database upgrade (schema v2). Before upgrading an existing library Cairn copies it to
+`cairn.db.v1.bak` in the data folder. *Fetch missing details* now means "no page signals stored yet", so after the upgrade
+it re-reads pages once to learn what tagging needs; lookups that failed are retried on the next run and pages with no cover
+are not re-fetched forever.
+
 ## Roadmap ideas
 
-Local caching of covers/icons for offline use · browser extension · full-text "permanent copy" of pages · reminders ·
-optional sync between devices · auto-update.
+Learn from your own tagging (similarity to already-tagged bookmarks) · embeddings for smarter matching · collection
+suggestions · local caching of covers/icons for offline use · browser extension · full-text "permanent copy" of pages ·
+reminders · optional sync between devices · auto-update.
 
 ## Licensing
 

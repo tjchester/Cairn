@@ -20,19 +20,34 @@ export function Editor({ bookmark }: { bookmark: Bookmark }): React.JSX.Element 
   const [suggestStatus, setSuggestStatus] = useState<string | null>(null)
   const [suggesting, setSuggesting] = useState(false)
 
+  const [modelBusy, setModelBusy] = useState(false)
+
   const suggest = async (): Promise<void> => {
     setSuggesting(true)
     setSuggestStatus(null)
+    const have = new Set(bookmark.tags.map((t) => t.toLowerCase()))
+    const fresh = (list: TagSuggestion[]): TagSuggestion[] => list.filter((sg) => !have.has(sg.tag.toLowerCase()))
+    const empty = 'No new suggestions for this bookmark.'
     try {
-      const result = await window.cairn.tagging.suggest({ bookmarkId: bookmark.id }, false)
-      const have = new Set(bookmark.tags.map((t) => t.toLowerCase()))
-      const fresh = result.suggestions.filter((sg) => !have.has(sg.tag.toLowerCase()))
-      setSuggestions(fresh)
-      setSuggestStatus(fresh.length === 0 ? 'No new suggestions for this bookmark.' : null)
+      const builtin = await window.cairn.tagging.suggest({ bookmarkId: bookmark.id }, false)
+      setSuggestions(fresh(builtin.suggestions))
+      const useModel = tagging.llm.enabled && tagging.llm.model !== ''
+      setSuggestStatus(!useModel && fresh(builtin.suggestions).length === 0 ? empty : null)
+      if (useModel) {
+        setModelBusy(true)
+        const withModel = await window.cairn.tagging.suggest({ bookmarkId: bookmark.id }, true)
+        if (withModel.llm === 'used') {
+          setSuggestions(fresh(withModel.suggestions))
+          setSuggestStatus(fresh(withModel.suggestions).length === 0 ? empty : null)
+        } else if (withModel.llm === 'failed') {
+          setSuggestStatus('Local model unavailable: ' + (withModel.error ?? 'unknown error'))
+        }
+      }
     } catch {
       setSuggestStatus('Could not suggest tags.')
     } finally {
       setSuggesting(false)
+      setModelBusy(false)
     }
   }
 
@@ -105,6 +120,7 @@ export function Editor({ bookmark }: { bookmark: Bookmark }): React.JSX.Element 
               <TagSuggestions
                 suggestions={suggestions}
                 taken={bookmark.tags}
+                busy={modelBusy ? 'Asking ' + tagging.llm.model + '…' : null}
                 status={suggestStatus}
                 onPick={(pick) => {
                   setSuggestions((current) => current.filter((c) => c.tag !== pick.tag))

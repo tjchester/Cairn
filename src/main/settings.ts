@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { DEFAULT_SETTINGS, DEFAULT_TAGGING, type Settings, type SettingsPatch, type TaggingSettings } from '@shared/types'
 import type { Repo } from './db/repo'
+import { validateBaseUrl } from './tagging/ollama'
 import { parseUserRules } from './tagging/rules'
 
 // App settings live in the database as key -> string. Simple ones are stored as-is; the nested `tagging` block is
@@ -9,7 +10,7 @@ import { parseUserRules } from './tagging/rules'
 const sortKey = z.enum(['created', 'updated', 'title', 'domain'])
 const direction = z.enum(['asc', 'desc'])
 
-const llmSchema = z.object({
+export const llmSchema = z.object({
   enabled: z.boolean(),
   baseUrl: z.string().max(300),
   model: z.string().max(200),
@@ -74,6 +75,8 @@ export function applySettingsPatch(repo: Repo, patch: SettingsPatch): Settings {
     const next = mergeTagging(readSettings(repo).tagging, tagging)
     const rules = parseUserRules(next.userRules)
     if (!rules.ok) throw new Error('Custom rules: ' + rules.error)
+    const address = validateBaseUrl(next.llm.baseUrl, next.llm.allowRemote)
+    if (!address.ok) throw new Error('Ollama address: ' + address.error)
     repo.setSettingRaw('tagging', JSON.stringify(taggingSchema.parse(next)))
   }
   for (const [key, value] of Object.entries(simple)) repo.setSettingRaw(key, String(value))

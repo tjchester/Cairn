@@ -1468,3 +1468,43 @@ code {
 .auto-tag-extra {
   margin-top: 10px;
 }
+
+/* ------------------------------------------------------------ local model */
+.llm-settings {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.llm-settings h4 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 13px;
+}
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+.check input[type='checkbox'] {
+  width: auto;
+  min-height: 0;
+  margin-top: 3px;
+}
+.llm-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+}
+.llm-status.ok {
+  color: var(--ok);
+}
+.llm-status.bad {
+  color: var(--warn);
+}

@@ -5,7 +5,7 @@ import { z } from 'zod'
 import type { Settings } from '@shared/types'
 import { isHttpUrl } from '@shared/url'
 import type { Repo } from './db/repo'
-import { applySettingsPatch, readSettings, settingsPatchSchema } from './settings'
+import { applySettingsPatch, llmSchema, readSettings, settingsPatchSchema } from './settings'
 import { EXPORT_EXTENSIONS, exportText, importText } from './services/importExport'
 import type { JobRunner } from './services/jobs'
 import { fetchMetadata } from './services/metadata'
@@ -230,6 +230,7 @@ export function registerIpc(ctx: IpcContext): void {
 
   // tagging
   handle('tagging:suggest', z.tuple([taggingTarget, z.boolean()]), ([target, withLlm]) => tagging.suggestResult(target, withLlm))
+  handle('tagging:ollama:status', z.tuple([llmSchema.partial().optional()]), ([overrides]) => tagging.llmStatus(overrides ?? {}))
   handle('tagging:review:count', noArgs, () => repo.pendingProposalCount())
   handle('tagging:review:groups', noArgs, () => repo.proposalGroups())
   handle('tagging:review:items', z.tuple([text(200)]), ([tag]) => repo.proposalItems(tag))

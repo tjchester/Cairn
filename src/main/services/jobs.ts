@@ -3,6 +3,7 @@ import type { JobKind, JobProgress, LinkStatus, StartJobOptions } from '@shared/
 import { domainOf } from '@shared/url'
 import type { Repo } from '../db/repo'
 import type { EngineContext } from '../tagging/engine'
+import { LlmSkipped } from '../tagging/llm'
 import type { TaggingService } from '../tagging/service'
 import {
   EMPTY_SIGNALS,
@@ -315,7 +316,15 @@ export class JobRunner {
     const mode = tagging?.mode() ?? 'off'
     if (!tagging || mode === 'off') return finish('Auto-tagging is turned off. Turn it on in Settings first.')
 
-    const candidates = this.repo.listForTagging(options.scope ?? 'untagged', options.ids ?? [])
+    let useLlm = options.useLlm === true
+    if (useLlm) {
+      if (!tagging.llmEnabled()) return finish('Turn on the local model in Settings (and choose a model) first.')
+      const status = await tagging.llmStatus()
+      if (!status.ok || !status.modelReady) return finish('Could not start: ' + status.message)
+    }
+    // A run with the (slow) model can be stopped and resumed: bookmarks that already have suggestions are skipped.
+    const scope = options.scope ?? 'untagged'
+    const candidates = this.repo.listForTagging(scope, options.ids ?? [], { skipWithProposals: useLlm && scope === 'untagged' })
     progress.total = candidates.length
     log('job-start', { job: 'auto-tag', mode, scope: options.scope ?? 'untagged', total: candidates.length })
     tick(true)
@@ -324,10 +333,40 @@ export class JobRunner {
     const runId = this.repo.createRun('auto-tag', mode)
     let touched = 0
     let tags = 0
+    let modelFailures = 0
+    let modelSkipped = 0
+    let consecutiveFailures = 0
+    let lastModelError = ''
     try {
       for (const candidate of candidates) {
         if (signal.aborted) break
-        const suggestions = tagging.suggestForCandidate(candidate, context)
+        let suggestions
+        if (useLlm) {
+          try {
+            suggestions = await tagging.suggestForCandidateWithLlm(candidate, context, signal)
+            consecutiveFailures = 0
+          } catch (error) {
+            if (signal.aborted) break
+            if (error instanceof LlmSkipped) {
+              // Deliberately not sent to the model (it looks like a prompt injection): not a failure of the model.
+              modelSkipped++
+              suggestions = tagging.suggestForCandidate(candidate, context)
+            } else {
+              modelFailures++
+              consecutiveFailures++
+              lastModelError = error instanceof Error ? error.message : String(error)
+              suggestions = tagging.suggestForCandidate(candidate, context) // still give the built-in answer
+              if (consecutiveFailures >= 3) {
+                // Something is wrong with the model or the connection: finish the run with the built-in engine only.
+                useLlm = false
+                progress.note = 'The local model stopped responding, so the rest of this run uses built-in suggestions only. ' + lastModelError
+                log('llm-gave-up', { error: lastModelError })
+              }
+            }
+          }
+        } else {
+          suggestions = tagging.suggestForCandidate(candidate, context)
+        }
         if (suggestions.length > 0) {
           const result = tagging.deliver(candidate.id, suggestions, mode, runId)
           if (result.added + result.proposed > 0) {
@@ -342,14 +381,16 @@ export class JobRunner {
     } finally {
       this.repo.finishRun(runId, mode === 'auto' ? tags : 0, touched)
       const plural = (n: number, word: string): string => n + ' ' + word + (n === 1 ? '' : 's')
-      log('job-end', { job: 'auto-tag', mode, touched, tags, cancelled: signal.aborted })
-      finish(
+      log('job-end', { job: 'auto-tag', mode, touched, tags, modelFailures, cancelled: signal.aborted })
+      const outcome =
         tags === 0
           ? 'No new tags to suggest for ' + plural(progress.done, 'bookmark') + '.'
           : mode === 'auto'
             ? plural(tags, 'tag') + ' added to ' + plural(touched, 'bookmark') + '. You can undo this run in Tools.'
             : plural(tags, 'tag') + ' suggested for ' + plural(touched, 'bookmark') + '. Review them in Tools.'
-      )
+      const model = modelFailures > 0 ? ' The local model failed for ' + plural(modelFailures, 'bookmark') + ' (built-in suggestions were used for those).' : ''
+      const skipped = modelSkipped > 0 ? ' ' + plural(modelSkipped, 'page') + ' looked like an attempt to instruct the model, so only built-in suggestions were used for them.' : ''
+      finish(outcome + model + skipped)
     }
   }
 

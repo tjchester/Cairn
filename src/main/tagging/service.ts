@@ -1,17 +1,19 @@
-import type { SuggestResult, TagSuggestion, TaggingMode, TaggingSettings, TaggingTarget } from '@shared/types'
+import type { LlmSettings, OllamaStatus, SuggestResult, TagSuggestion, TaggingMode, TaggingSettings, TaggingTarget } from '@shared/types'
 import type { Repo, TaggingCandidate } from '../db/repo'
-import { suggestTags, type EngineContext, type EngineInput } from './engine'
+import { collectCandidates, mergeCandidates, suggestTags, type Candidate, type EngineContext, type EngineInput } from './engine'
+import { LlmSkipped, looksLikeInjection, OllamaClient, type LlmClient, type LlmInput } from './llm'
 import { compileRules, parseUserRules, type CompiledRules } from './rules'
 import { canon } from './text'
 import { Vocabulary } from './vocabulary'
 
-/** Connects the engine to the library (existing tags, blocked tags, stored page signals) and to the settings. */
+/** Connects the engine to the library (existing tags, blocked tags, stored page signals), the settings and, optionally, a local model. */
 export class TaggingService {
   private rulesCache: { text: string; compiled: CompiledRules } | null = null
 
   constructor(
     private readonly repo: Repo,
-    private readonly settings: () => TaggingSettings
+    private readonly settings: () => TaggingSettings,
+    private readonly llm: LlmClient = new OllamaClient()
   ) {}
 
   /** Built-in rules plus the user's custom ones (cached until the custom rules change; invalid ones are ignored). */
@@ -34,6 +36,10 @@ export class TaggingService {
     }
   }
 
+  mode(): TaggingMode {
+    return this.settings().mode
+  }
+
   inputFor(target: TaggingTarget): EngineInput | null {
     if ('bookmarkId' in target) {
       const candidate = this.repo.getTaggingCandidate(target.bookmarkId)
@@ -43,6 +49,10 @@ export class TaggingService {
     return { url, title, excerpt, signals: signals ?? null, tags: tags ?? [] }
   }
 
+  private inputForCandidate(candidate: TaggingCandidate): EngineInput {
+    return { url: candidate.url, title: candidate.title, excerpt: candidate.excerpt, signals: candidate.signals, tags: candidate.tags }
+  }
+
   /** Built-in suggestions only: instant, offline. */
   suggest(target: TaggingTarget, context: EngineContext = this.context()): TagSuggestion[] {
     if (this.settings().mode === 'off') return []
@@ -50,16 +60,74 @@ export class TaggingService {
     return input ? suggestTags(input, context) : []
   }
 
-  mode(): TaggingMode {
-    return this.settings().mode
-  }
-
   /** Built-in suggestions for a bookmark that has already been loaded (used by bulk jobs). */
   suggestForCandidate(candidate: TaggingCandidate, context: EngineContext): TagSuggestion[] {
-    return suggestTags(
-      { url: candidate.url, title: candidate.title, excerpt: candidate.excerpt, signals: candidate.signals, tags: candidate.tags },
-      context
-    )
+    return suggestTags(this.inputForCandidate(candidate), context)
+  }
+
+  // ------------------------------------------------------------ local model
+
+  /** True when the user turned the local model on and picked a model. */
+  llmEnabled(): boolean {
+    const s = this.settings()
+    return s.mode !== 'off' && s.llm.enabled && s.llm.model.trim() !== ''
+  }
+
+  private llmInput(input: EngineInput, context: EngineContext): LlmInput {
+    const llm = this.settings().llm
+    const gist = input.title + ' ' + input.excerpt + ' ' + (input.signals?.keywords.join(' ') ?? '')
+    return {
+      url: input.url,
+      title: input.title,
+      excerpt: input.excerpt,
+      // Page text only leaves the app if the user opted in; private notes are never part of the input at all.
+      pageText: llm.sendPageText ? (input.signals?.text ?? '') : '',
+      vocabulary: context.vocabulary.relevant(gist, 80),
+      instructions: llm.instructions,
+      maxTags: context.maxTags
+    }
+  }
+
+  /**
+   * Built-in and local-model suggestions merged: the model's tags go through the same mapping onto your existing
+   * tags, blocklist and limits, and tags both agree on rank higher. Throws if the model cannot be used.
+   */
+  async suggestWithLlm(input: EngineInput, context: EngineContext, signal?: AbortSignal): Promise<TagSuggestion[]> {
+    const prepared = this.llmInput(input, context)
+    if (looksLikeInjection([prepared.title, prepared.excerpt, prepared.pageText, prepared.url].join('\n'))) {
+      throw new LlmSkipped('The local model was not used for this page: its text looks like it is trying to give the model instructions.')
+    }
+    const tags = await this.llm.suggest(prepared, this.settings().llm, signal)
+    const fromModel: Candidate[] = tags.map((tag, index) => ({
+      tag,
+      score: Math.max(0.55, 0.75 - index * 0.05),
+      source: 'llm',
+      reason: 'Suggested by the local model',
+      trusted: true
+    }))
+    return mergeCandidates([...collectCandidates(input, context), ...fromModel], input, context)
+  }
+
+  suggestForCandidateWithLlm(candidate: TaggingCandidate, context: EngineContext, signal?: AbortSignal): Promise<TagSuggestion[]> {
+    return this.suggestWithLlm(this.inputForCandidate(candidate), context, signal)
+  }
+
+  /** Checks the connection and the chosen model. `overrides` lets Settings test values that are not saved yet. */
+  llmStatus(overrides: Partial<LlmSettings> = {}): Promise<OllamaStatus> {
+    return this.llm.status({ ...this.settings().llm, ...overrides })
+  }
+
+  async suggestResult(target: TaggingTarget, withLlm: boolean): Promise<SuggestResult> {
+    const input = this.inputFor(target)
+    if (!input || this.settings().mode === 'off') return { suggestions: [], llm: 'off' }
+    const context = this.context()
+    if (!withLlm || !this.llmEnabled()) return { suggestions: suggestTags(input, context), llm: 'off' }
+    try {
+      return { suggestions: await this.suggestWithLlm(input, context), llm: 'used' }
+    } catch (error) {
+      // The built-in answer is still useful; say why the model did not contribute.
+      return { suggestions: suggestTags(input, context), llm: 'failed', error: error instanceof Error ? error.message : String(error) }
+    }
   }
 
   /**
@@ -84,9 +152,5 @@ export class TaggingService {
       fresh.map((s) => ({ tag: s.tag, score: s.score, origin: s.origin, reason: s.reasons[0] ?? '' }))
     )
     return { added: 0, proposed }
-  }
-
-  async suggestResult(target: TaggingTarget, _withLlm: boolean): Promise<SuggestResult> {
-    return { suggestions: this.suggest(target), llm: 'off' }
   }
 }

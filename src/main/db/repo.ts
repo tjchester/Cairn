@@ -762,7 +762,7 @@ export class Repo {
   }
 
   /** Bookmarks to consider for auto-tagging: those with no tags, everything, or a given set. */
-  listForTagging(scope: 'untagged' | 'all' | 'ids', ids: number[] = []): TaggingCandidate[] {
+  listForTagging(scope: 'untagged' | 'all' | 'ids', ids: number[] = [], options: { skipWithProposals?: boolean } = {}): TaggingCandidate[] {
     const rows: Row[] = []
     if (scope === 'ids') {
       for (const part of chunk(ids)) {
@@ -770,7 +770,9 @@ export class Repo {
       }
     } else {
       const untagged = scope === 'untagged' ? ' AND NOT EXISTS (SELECT 1 FROM bookmark_tags x WHERE x.bookmark_id = b.id)' : ''
-      rows.push(...this.all(Repo.CANDIDATE_SELECT + ' WHERE b.deleted_at IS NULL' + untagged + ' ORDER BY b.id'))
+      // A long run (the local model is slow) can be stopped and resumed: bookmarks that already got proposals are done.
+      const processed = options.skipWithProposals ? ' AND NOT EXISTS (SELECT 1 FROM tag_proposals p WHERE p.bookmark_id = b.id)' : ''
+      rows.push(...this.all(Repo.CANDIDATE_SELECT + ' WHERE b.deleted_at IS NULL' + untagged + processed + ' ORDER BY b.id'))
     }
     return rows.map((row) => this.toCandidate(row))
   }
