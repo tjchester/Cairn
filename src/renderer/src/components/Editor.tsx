@@ -1,9 +1,9 @@
 import { useState } from 'react'
-import type { Bookmark } from '@shared/types'
+import type { Bookmark, TagSuggestion } from '@shared/types'
 import { Icon } from '../icons'
 import { useStore } from '../store'
 import { formatDateTime } from '../util'
-import { CollectionSelect, Cover, Favicon, TagInput } from './ui'
+import { CollectionSelect, Cover, Favicon, TagInput, TagSuggestions } from './ui'
 
 export function Editor({ bookmark }: { bookmark: Bookmark }): React.JSX.Element {
   const s = useStore()
@@ -13,6 +13,28 @@ export function Editor({ bookmark }: { bookmark: Bookmark }): React.JSX.Element 
   const [excerpt, setExcerpt] = useState(bookmark.excerpt)
   const [busy, setBusy] = useState(false)
   const inTrash = bookmark.deletedAt !== null
+
+  // Tag suggestions on request (Suggest tags).
+  const tagging = s.settings.tagging
+  const [suggestions, setSuggestions] = useState<TagSuggestion[]>([])
+  const [suggestStatus, setSuggestStatus] = useState<string | null>(null)
+  const [suggesting, setSuggesting] = useState(false)
+
+  const suggest = async (): Promise<void> => {
+    setSuggesting(true)
+    setSuggestStatus(null)
+    try {
+      const result = await window.cairn.tagging.suggest({ bookmarkId: bookmark.id }, false)
+      const have = new Set(bookmark.tags.map((t) => t.toLowerCase()))
+      const fresh = result.suggestions.filter((sg) => !have.has(sg.tag.toLowerCase()))
+      setSuggestions(fresh)
+      setSuggestStatus(fresh.length === 0 ? 'No new suggestions for this bookmark.' : null)
+    } catch {
+      setSuggestStatus('Could not suggest tags.')
+    } finally {
+      setSuggesting(false)
+    }
+  }
 
   const commitText = async (field: 'title' | 'note' | 'excerpt', value: string): Promise<void> => {
     if (value === bookmark[field]) return
@@ -74,7 +96,23 @@ export function Editor({ bookmark }: { bookmark: Bookmark }): React.JSX.Element 
 
         <div className="field">
           <span>Tags</span>
-          <TagInput value={bookmark.tags} onChange={(tags) => void s.saveBookmark(bookmark.id, { tags })} />
+          <TagInput value={bookmark.tags} autoTags={bookmark.autoTags} onChange={(tags) => void s.saveBookmark(bookmark.id, { tags })} />
+          {tagging.mode !== 'off' && !inTrash && (
+            <>
+              <button type="button" className="link-btn suggest-btn" onClick={() => void suggest()} disabled={suggesting}>
+                <Icon name="sparkles" size={13} /> {suggesting ? 'Thinking…' : 'Suggest tags'}
+              </button>
+              <TagSuggestions
+                suggestions={suggestions}
+                taken={bookmark.tags}
+                status={suggestStatus}
+                onPick={(pick) => {
+                  setSuggestions((current) => current.filter((c) => c.tag !== pick.tag))
+                  void s.saveBookmark(bookmark.id, { tags: [...bookmark.tags, pick.tag] })
+                }}
+              />
+            </>
+          )}
         </div>
 
         <label className="field">

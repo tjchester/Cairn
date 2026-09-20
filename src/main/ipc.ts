@@ -2,13 +2,15 @@ import { readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell, type IpcMainInvokeEvent } from 'electron'
 import { z } from 'zod'
-import { DEFAULT_SETTINGS, type Settings } from '@shared/types'
+import type { Settings } from '@shared/types'
 import { isHttpUrl } from '@shared/url'
 import type { Repo } from './db/repo'
+import { applySettingsPatch, readSettings, settingsPatchSchema } from './settings'
 import { EXPORT_EXTENSIONS, exportText, importText } from './services/importExport'
 import type { JobRunner } from './services/jobs'
 import { fetchMetadata } from './services/metadata'
 import { refreshBookmarkMetadata } from './services/refresh'
+import type { TaggingService } from './tagging/service'
 import { showLegalDocs } from './window'
 
 const MAX_IMPORT_BYTES = 100 * 1024 * 1024
@@ -44,6 +46,15 @@ const query = z.object({
 })
 
 const tags = z.array(text(200)).max(200)
+const signalsSchema = z.object({
+  keywords: z.array(text(80)).max(30),
+  ogType: text(80).nullable(),
+  siteName: text(100).nullable(),
+  lang: text(12).nullable(),
+  section: text(80).nullable(),
+  text: text(5000)
+})
+
 const bookmarkFields = {
   title: text(2000).optional(),
   note: text(50_000).optional(),
@@ -52,6 +63,8 @@ const bookmarkFields = {
   faviconUrl: imageUrl,
   collectionId: id.nullish(),
   tags: tags.optional(),
+  tagSources: z.record(text(200), z.enum(['builtin', 'llm'])).optional(),
+  signals: signalsSchema.nullish(),
   favorite: z.boolean().optional()
 }
 const bookmarkInput = z.object({ url: text(4096), ...bookmarkFields })
@@ -63,16 +76,18 @@ const bulkPatch = z.object({
   removeTags: tags.optional()
 })
 
-const settingsPatch = z
-  .object({
-    theme: z.enum(['system', 'light', 'dark']),
-    view: z.enum(['list', 'grid', 'headlines']),
-    sort: sortKey,
-    direction,
-    sidebarWidth: z.number().int().min(180).max(480)
+const taggingTarget = z.union([
+  z.object({ bookmarkId: id }),
+  z.object({
+    draft: z.object({
+      url: text(4096),
+      title: text(2000),
+      excerpt: text(10_000),
+      signals: signalsSchema.nullish(),
+      tags: tags.optional()
+    })
   })
-  .partial()
-  .strict()
+])
 
 const noArgs = z.tuple([])
 
@@ -81,27 +96,19 @@ const noArgs = z.tuple([])
 export interface IpcContext {
   repo: Repo
   jobs: JobRunner
+  tagging: TaggingService
   isTrustedUrl: (url: string) => boolean
   getWindow: () => BrowserWindow | null
 }
 
-export function readSettings(repo: Repo): Settings {
-  const raw = repo.getSettingsRaw()
-  const merged: Record<string, unknown> = { ...DEFAULT_SETTINGS }
-  for (const [key, value] of Object.entries(raw)) {
-    if (key === 'sidebarWidth') merged[key] = Number(value)
-    else merged[key] = value
-  }
-  const parsed = settingsPatch.safeParse(merged)
-  return { ...DEFAULT_SETTINGS, ...(parsed.success ? parsed.data : {}) }
-}
+export { readSettings }
 
 export function applyTheme(settings: Settings): void {
   nativeTheme.themeSource = settings.theme
 }
 
 export function registerIpc(ctx: IpcContext): void {
-  const { repo, jobs } = ctx
+  const { repo, jobs, tagging } = ctx
 
   function handle<S extends z.ZodType>(channel: string, schema: S, fn: (args: z.output<S>, event: IpcMainInvokeEvent) => unknown): void {
     ipcMain.handle(channel, async (event, ...raw: unknown[]) => {
@@ -209,12 +216,14 @@ export function registerIpc(ctx: IpcContext): void {
 
   // settings
   handle('settings:get', noArgs, () => readSettings(repo))
-  handle('settings:set', z.tuple([settingsPatch]), ([patch]) => {
-    for (const [key, value] of Object.entries(patch)) repo.setSettingRaw(key, String(value))
-    const settings = readSettings(repo)
+  handle('settings:set', z.tuple([settingsPatchSchema]), ([patch]) => {
+    const settings = applySettingsPatch(repo, patch)
     applyTheme(settings)
     return settings
   })
+
+  // tagging
+  handle('tagging:suggest', z.tuple([taggingTarget, z.boolean()]), ([target, withLlm]) => tagging.suggestResult(target, withLlm))
 
   // app
   handle('app:version', noArgs, () => app.getVersion())

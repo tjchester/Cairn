@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
-import type { Bookmark, PageMetadata } from '@shared/types'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { Bookmark, PageMetadata, TagSuggestion } from '@shared/types'
 import { coerceUrl, extractUrls } from '@shared/url'
 import { Icon } from '../icons'
 import { useStore } from '../store'
 import { errorMessage } from '../util'
-import { CollectionSelect, Cover, Favicon, Modal, TagInput } from './ui'
+import { CollectionSelect, Cover, Favicon, Modal, TagInput, TagSuggestions } from './ui'
 
 const api = window.cairn
 
@@ -27,6 +27,17 @@ export function AddDialog({ initialUrls }: { initialUrls?: string[] }): React.JS
   const [metaState, setMetaState] = useState<MetaState>('idle')
   const [existing, setExisting] = useState<Bookmark | null>(null)
   const [saving, setSaving] = useState(false)
+
+  // Tag suggestions. In "auto" mode they are added to the tag field (marked as automatic) until the user edits it.
+  const tagging = s.settings.tagging
+  const [suggestions, setSuggestions] = useState<TagSuggestion[]>([])
+  const [autoSources, setAutoSources] = useState<Record<string, 'builtin' | 'llm'>>({})
+  const tagsTouched = useRef(false)
+
+  const changeTags = (next: string[]): void => {
+    tagsTouched.current = true
+    setTags(next)
+  }
 
   const normalized = useMemo(() => {
     try {
@@ -64,6 +75,38 @@ export function AddDialog({ initialUrls }: { initialUrls?: string[] }): React.JS
     }
   }, [normalized])
 
+  // Suggest tags once the page details have been looked up (the built-in engine answers in milliseconds).
+  useEffect(() => {
+    if (!normalized || tagging.mode === 'off' || metaState === 'loading' || bulk.length > 1) {
+      setSuggestions([])
+      return
+    }
+    let cancelled = false
+    const timer = setTimeout(() => {
+      api.tagging
+        .suggest({ draft: { url: normalized, title: meta?.title || title, excerpt: meta?.excerpt ?? '', signals: meta?.signals ?? null, tags } }, false)
+        .then((result) => {
+          if (cancelled) return
+          setSuggestions(result.suggestions)
+          if (tagging.mode === 'auto' && !tagsTouched.current) {
+            const have = new Set(tags.map((t) => t.toLowerCase()))
+            const fresh = result.suggestions.filter((sg) => !have.has(sg.tag.toLowerCase()))
+            if (fresh.length > 0) {
+              setTags((current) => [...current, ...fresh.map((sg) => sg.tag)])
+              setAutoSources((current) => ({ ...current, ...Object.fromEntries(fresh.map((sg) => [sg.tag, sg.origin])) }))
+            }
+          }
+        })
+        .catch(() => undefined)
+    }, 250)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+    // Only the page (not each keystroke in the title or tags) should trigger a new suggestion.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [normalized, meta, metaState, tagging.mode, bulk.length])
+
   const onPaste = (e: React.ClipboardEvent): void => {
     const found = extractUrls(e.clipboardData.getData('text'))
     if (found.length > 1) {
@@ -84,7 +127,9 @@ export function AddDialog({ initialUrls }: { initialUrls?: string[] }): React.JS
         coverUrl: meta?.coverUrl,
         faviconUrl: meta?.faviconUrl,
         collectionId,
-        tags
+        tags,
+        tagSources: Object.fromEntries(tags.filter((t) => autoSources[t]).map((t) => [t, autoSources[t] as 'builtin' | 'llm'])),
+        signals: meta?.signals ?? null
       })
       close()
       s.toast('Bookmark saved', 'success')
@@ -201,7 +246,17 @@ export function AddDialog({ initialUrls }: { initialUrls?: string[] }): React.JS
 
         <div className="field">
           <span>Tags</span>
-          <TagInput value={tags} onChange={setTags} />
+          <TagInput value={tags} onChange={changeTags} autoTags={Object.keys(autoSources)} />
+          {!isBulk && (
+            <TagSuggestions
+              suggestions={suggestions}
+              taken={tags}
+              onPick={(pick) => {
+                tagsTouched.current = true
+                setTags((current) => [...current, pick.tag])
+              }}
+            />
+          )}
         </div>
 
         {!isBulk && (

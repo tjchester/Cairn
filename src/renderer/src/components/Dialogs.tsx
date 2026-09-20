@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { Bookmark, ThemeSetting } from '@shared/types'
+import type { Bookmark, TaggingMode, ThemeSetting } from '@shared/types'
 import { Icon } from '../icons'
 import { useStore } from '../store'
 import { formatDate } from '../util'
@@ -34,6 +34,8 @@ export function SettingsDialog(): React.JSX.Element {
           ))}
         </div>
       </section>
+
+      <AutoTaggingSettings />
 
       <section className="settings-section">
         <h3>
@@ -74,6 +76,71 @@ export function SettingsDialog(): React.JSX.Element {
         </div>
       </section>
     </Modal>
+  )
+}
+
+// ------------------------------------------------------------ Auto-tagging
+
+const TAG_MODES: { value: TaggingMode; label: string; help: string }[] = [
+  { value: 'off', label: 'Off', help: 'No tag suggestions.' },
+  { value: 'suggest', label: 'Suggest', help: 'Shows suggested tags when you add or edit a bookmark; you click the ones you want.' },
+  { value: 'auto', label: 'Auto', help: 'Also adds them for you when you add a bookmark. Automatic tags are marked so you can review or remove them.' }
+]
+
+const RULES_PLACEHOLDER = '{\n  "domains": { "example.com": ["my-tag"] },\n  "topics": { "gardening": ["allotment", "raised bed"] }\n}'
+
+function AutoTaggingSettings(): React.JSX.Element {
+  const s = useStore()
+  const tagging = s.settings.tagging
+  const [rules, setRules] = useState(tagging.userRules)
+
+  return (
+    <section className="settings-section">
+      <h3>
+        <Icon name="sparkles" /> Auto-tagging
+      </h3>
+      <p className="muted">
+        Suggests tags from a page&apos;s site, address, keywords and text, reusing the tags you already have so your tag list doesn&apos;t sprawl.
+        This all happens on your computer.
+      </p>
+      <div className="segmented wide" role="group" aria-label="Auto-tagging mode">
+        {TAG_MODES.map((m) => (
+          <button key={m.value} className={tagging.mode === m.value ? 'active' : ''} aria-pressed={tagging.mode === m.value} onClick={() => void s.updateSettings({ tagging: { mode: m.value } })}>
+            {m.label}
+          </button>
+        ))}
+      </div>
+      <p className="muted settings-note">{TAG_MODES.find((m) => m.value === tagging.mode)?.help}</p>
+
+      <label className="field inline">
+        <span>Most tags suggested per bookmark</span>
+        <select value={tagging.maxTags} onChange={(e) => void s.updateSettings({ tagging: { maxTags: Number(e.target.value) } })} aria-label="Most tags per bookmark">
+          {[1, 2, 3, 4, 5, 6, 8].map((n) => (
+            <option key={n} value={n}>
+              {n}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <details className="rules">
+        <summary>Custom rules (advanced)</summary>
+        <p className="muted settings-note">
+          Add your own knowledge on top of the built-in rules, as JSON. Sections: <code>domains</code>, <code>topics</code>, <code>pathSegments</code>, <code>extensions</code>,{' '}
+          <code>tlds</code>, <code>hostPrefixes</code>, <code>ogTypes</code>.
+        </p>
+        <textarea
+          className="mono"
+          rows={6}
+          spellCheck={false}
+          value={rules}
+          placeholder={RULES_PLACEHOLDER}
+          onChange={(e) => setRules(e.target.value)}
+          onBlur={() => rules !== tagging.userRules && void s.updateSettings({ tagging: { userRules: rules } })}
+          aria-label="Custom tagging rules"
+        />
+      </details>
+    </section>
   )
 }
 
@@ -257,8 +324,8 @@ export function ToolsDialog(): React.JSX.Element {
       )}
       <JobPanel
         kind="fetch-metadata"
-        title="Fetch missing covers & icons"
-        description="Downloads preview images, descriptions and site icons for bookmarks that don't have them yet (useful after an import)."
+        title="Fetch missing details"
+        description="Downloads the title, description, cover image, site icon and page keywords (used for tag suggestions) for bookmarks that haven't been fetched yet, for example after an import, and retries the ones that failed."
         actionLabel="Fetch missing details"
       />
     </Modal>

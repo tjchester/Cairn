@@ -1,5 +1,5 @@
 import { parse } from 'node-html-parser'
-import type { LinkStatus, PageMetadata } from '@shared/types'
+import type { LinkStatus, PageMetadata, PageSignals } from '@shared/types'
 import { coerceUrl, isHttpUrl } from '@shared/url'
 import { classifyNetworkError, describeNetworkError, parseRetryAfter, type NetworkFailure } from './net'
 
@@ -24,6 +24,93 @@ function resolveHttp(value: string | undefined | null, base: string): string | n
     return isHttpUrl(abs) ? abs : null
   } catch {
     return null
+  }
+}
+
+/** "Fetched, but nothing to learn": recorded for pages that answered without useful content (errors, images, PDFs). */
+export const EMPTY_SIGNALS: PageSignals = { keywords: [], ogType: null, siteName: null, lang: null, section: null, text: '' }
+
+const MAX_SIGNAL_TEXT = 2000
+const MAX_KEYWORDS = 20
+
+function splitKeywords(value: string): string[] {
+  return value
+    .split(/[,;|]/)
+    .map((k) => clean(k, 40))
+    .filter((k) => k.length > 1)
+}
+
+/** Keywords and section from schema.org JSON-LD blocks (best effort; malformed JSON is ignored). */
+function jsonLdSignals(root: ReturnType<typeof parse>): { keywords: string[]; section: string | null } {
+  const found = { keywords: [] as string[], section: null as string | null }
+  const walk = (value: unknown, depth: number): void => {
+    if (depth > 4 || !value || typeof value !== 'object') return
+    if (Array.isArray(value)) {
+      for (const item of value.slice(0, 20)) walk(item, depth + 1)
+      return
+    }
+    const obj = value as Record<string, unknown>
+    const kw = obj['keywords']
+    if (typeof kw === 'string') found.keywords.push(...splitKeywords(kw))
+    else if (Array.isArray(kw)) for (const k of kw) if (typeof k === 'string') found.keywords.push(clean(k, 40))
+    const section = obj['articleSection']
+    if (!found.section && typeof section === 'string') found.section = clean(section, 40)
+    else if (!found.section && Array.isArray(section) && typeof section[0] === 'string') found.section = clean(section[0], 40)
+    walk(obj['@graph'], depth + 1)
+  }
+  for (const node of root.querySelectorAll('script[type="application/ld+json"]')) {
+    const raw = node.rawText
+    if (!raw || raw.length > 200_000) continue
+    try {
+      walk(JSON.parse(raw), 0)
+    } catch {
+      // not valid JSON: ignore
+    }
+  }
+  return found
+}
+
+/** The first ~2000 characters of real paragraph text (short fragments such as menus and captions are skipped). */
+function paragraphText(root: ReturnType<typeof parse>): string {
+  const parts: string[] = []
+  let total = 0
+  for (const p of root.querySelectorAll('p')) {
+    const text = clean(p.text, 600)
+    if (text.length < 60) continue
+    parts.push(text)
+    total += text.length + 1
+    if (total >= MAX_SIGNAL_TEXT) break
+  }
+  return parts.join(' ').slice(0, MAX_SIGNAL_TEXT)
+}
+
+function extractSignals(root: ReturnType<typeof parse>, meta: Map<string, string>): PageSignals {
+  const keywords: string[] = []
+  const seen = new Set<string>()
+  const add = (k: string): void => {
+    const key = k.toLowerCase()
+    if (k && !seen.has(key) && keywords.length < MAX_KEYWORDS) {
+      seen.add(key)
+      keywords.push(k)
+    }
+  }
+  // Explicit per-article tags are the most reliable, then JSON-LD, then the old-style keywords meta tag.
+  for (const node of root.querySelectorAll('meta')) {
+    const key = (node.getAttribute('property') ?? node.getAttribute('name') ?? '').toLowerCase()
+    if (key === 'article:tag') add(clean(node.getAttribute('content'), 40))
+  }
+  const ld = jsonLdSignals(root)
+  for (const k of ld.keywords) add(k)
+  for (const k of splitKeywords(meta.get('keywords') ?? '')) add(k)
+
+  const lang = clean(root.querySelector('html')?.getAttribute('lang'), 12).toLowerCase().split(/[-_]/)[0] ?? ''
+  return {
+    keywords,
+    ogType: clean(meta.get('og:type'), 40).toLowerCase() || null,
+    siteName: clean(meta.get('og:site_name'), 60) || null,
+    lang: /^[a-z]{2,3}$/.test(lang) ? lang : null,
+    section: clean(meta.get('article:section'), 40) || ld.section || null,
+    text: paragraphText(root)
   }
 }
 
@@ -61,7 +148,7 @@ export function parseMetadata(html: string, baseUrl: string): Omit<PageMetadata,
   } catch {
     // ignore
   }
-  return { title, excerpt, coverUrl, faviconUrl: favicon ?? touchIcon ?? fallback }
+  return { title, excerpt, coverUrl, faviconUrl: favicon ?? touchIcon ?? fallback, signals: extractSignals(root, meta) }
 }
 
 function sniffCharset(contentType: string, head: Uint8Array): string {

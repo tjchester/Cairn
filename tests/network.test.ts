@@ -22,7 +22,7 @@ const networkError = (code: string) => Object.assign(new TypeError('fetch failed
 
 describe('parseMetadata', () => {
   it('prefers Open Graph, resolves relative URLs and decodes entities', () => {
-    expect(parseMetadata(PAGE, 'https://example.com/post')).toEqual({
+    expect(parseMetadata(PAGE, 'https://example.com/post')).toMatchObject({
       title: 'Rust & Friends',
       excerpt: 'A page about things',
       coverUrl: 'https://example.com/img/cover.png',
@@ -33,6 +33,41 @@ describe('parseMetadata', () => {
   it('falls back to <title> and /favicon.ico', () => {
     const meta = parseMetadata('<html><head><title>Only title</title></head></html>', 'https://x.org/a/b')
     expect(meta).toMatchObject({ title: 'Only title', coverUrl: null, faviconUrl: 'https://x.org/favicon.ico' })
+  })
+
+  it('extracts tagging signals: keywords from every source, page type, language, section and body text', () => {
+    const html = `<!doctype html><html lang="en-GB"><head>
+      <meta property="og:type" content="Article"><meta property="og:site_name" content="Example Times">
+      <meta property="article:section" content="Technology">
+      <meta property="article:tag" content="Rust"><meta property="article:tag" content="Systems Programming">
+      <meta name="keywords" content="rust, memory safety; ownership , Rust">
+      <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Article","keywords":["borrow checker","rust"]}]}</script>
+      <script type="application/ld+json">{ this is not json </script>
+      </head><body><nav><p>Menu</p></nav>
+      <p>Rust is a systems programming language focused on safety, speed and concurrency for everyone.</p>
+      <p>Short.</p>
+      <p>Its ownership model guarantees memory safety without needing a garbage collector at runtime.</p>
+      </body></html>`
+    const { signals } = parseMetadata(html, 'https://example.com/post')
+    expect(signals?.keywords).toEqual(['Rust', 'Systems Programming', 'borrow checker', 'memory safety', 'ownership']) // de-duplicated, best sources first
+    expect(signals).toMatchObject({ ogType: 'article', siteName: 'Example Times', lang: 'en', section: 'Technology' })
+    expect(signals?.text).toContain('systems programming language')
+    expect(signals?.text).toContain('garbage collector')
+    expect(signals?.text).not.toContain('Menu')
+    expect(signals?.text).not.toContain('Short.')
+  })
+
+  it('returns empty, safe signals for a bare page and caps the amount of text kept', () => {
+    expect(parseMetadata('<html><body>hi</body></html>', 'https://x.org/').signals).toEqual({
+      keywords: [],
+      ogType: null,
+      siteName: null,
+      lang: null,
+      section: null,
+      text: ''
+    })
+    const long = '<p>' + 'word '.repeat(400) + '</p>'
+    expect(parseMetadata('<html><body>' + long.repeat(5) + '</body></html>', 'https://x.org/').signals?.text.length).toBeLessThanOrEqual(2000)
   })
 
   it('ignores non-http image URLs', () => {

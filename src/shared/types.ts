@@ -6,7 +6,7 @@ export type SortDirection = 'asc' | 'desc'
 export type ViewMode = 'list' | 'grid' | 'headlines'
 export type ThemeSetting = 'system' | 'light' | 'dark'
 export type ExportFormat = 'html' | 'csv' | 'json'
-export type JobKind = 'check-links' | 'fetch-metadata'
+export type JobKind = 'check-links' | 'fetch-metadata' | 'auto-tag'
 
 export interface Collection {
   id: number
@@ -27,6 +27,8 @@ export interface Bookmark {
   domain: string
   collectionId: number | null
   tags: string[]
+  /** The subset of `tags` that were added automatically (built-in engine or local LLM) rather than by the user. */
+  autoTags: string[]
   favorite: boolean
   status: LinkStatus
   httpStatus: number | null
@@ -45,6 +47,10 @@ export interface BookmarkInput {
   faviconUrl?: string | null
   collectionId?: number | null
   tags?: string[]
+  /** Tags in `tags` that came from auto-tagging (recorded so they can be reviewed or removed later). */
+  tagSources?: Record<string, 'builtin' | 'llm'>
+  /** What the page said about itself (from the details lookup), so it need not be fetched again for tagging. */
+  signals?: PageSignals | null
   favorite?: boolean
   createdAt?: string
 }
@@ -95,6 +101,20 @@ export interface TagInfo {
   count: number
 }
 
+/** What a page says about itself, kept locally so tags can be suggested without fetching it again. */
+export interface PageSignals {
+  /** Author-supplied: meta keywords, article:tag and JSON-LD keywords. */
+  keywords: string[]
+  ogType: string | null
+  siteName: string | null
+  /** Primary language subtag, e.g. "en". */
+  lang: string | null
+  /** Article section / category. */
+  section: string | null
+  /** The first ~2000 characters of the page's paragraphs. */
+  text: string
+}
+
 export interface PageMetadata {
   title: string
   excerpt: string
@@ -102,6 +122,109 @@ export interface PageMetadata {
   faviconUrl: string | null
   finalUrl: string
   status: number | null
+  signals?: PageSignals
+}
+
+// ------------------------------------------------------------------- tagging
+
+export type SuggestionOrigin = 'builtin' | 'llm'
+export type SuggestionSource = 'domain' | 'path' | 'file-type' | 'page-type' | 'metadata' | 'topic' | 'vocabulary' | 'llm'
+
+export interface TagSuggestion {
+  tag: string
+  /** Confidence from 0 to 1. */
+  score: number
+  origin: SuggestionOrigin
+  sources: SuggestionSource[]
+  /** Human-readable explanations, e.g. "github.com is a code host". */
+  reasons: string[]
+  /** True if other bookmarks in the library already use this tag (so accepting it adds no new tag). */
+  existing: boolean
+}
+
+/** A bookmark that is not saved yet (the Add dialog). */
+export interface TaggingDraft {
+  url: string
+  title: string
+  excerpt: string
+  signals?: PageSignals | null
+  tags?: string[]
+}
+
+export type TaggingTarget = { bookmarkId: number } | { draft: TaggingDraft }
+
+export interface SuggestResult {
+  suggestions: TagSuggestion[]
+  /** Whether the optional local LLM contributed: off (not enabled), used, or failed (see `error`). */
+  llm: 'off' | 'used' | 'failed'
+  error?: string
+}
+
+export type TaggingMode = 'off' | 'suggest' | 'auto'
+
+export interface LlmSettings {
+  enabled: boolean
+  /** Ollama server address. Loopback by default; anything else needs `allowRemote`. */
+  baseUrl: string
+  model: string
+  /** Allow a server that is not on this computer (bookmark titles, URLs and descriptions are sent to it). */
+  allowRemote: boolean
+  /** Also send the first part of each page's text (off by default). */
+  sendPageText: boolean
+  /** Extra guidance appended to the prompt, e.g. "Prefer broad topics over product names." */
+  instructions: string
+}
+
+export interface TaggingSettings {
+  mode: TaggingMode
+  maxTags: number
+  /** Optional custom rules (JSON) layered over the built-in ones. */
+  userRules: string
+  llm: LlmSettings
+}
+
+export const DEFAULT_TAGGING: TaggingSettings = {
+  mode: 'suggest',
+  maxTags: 5,
+  userRules: '',
+  llm: { enabled: false, baseUrl: 'http://127.0.0.1:11434', model: '', allowRemote: false, sendPageText: false, instructions: '' }
+}
+
+export interface ProposalGroup {
+  tag: string
+  count: number
+  avgScore: number
+  existing: boolean
+  origins: SuggestionOrigin[]
+}
+
+export interface ProposalItem {
+  proposalId: number
+  bookmarkId: number
+  title: string
+  url: string
+  score: number
+  reason: string
+  origin: SuggestionOrigin
+}
+
+export interface TagRunInfo {
+  id: number
+  kind: string
+  mode: string
+  createdAt: string
+  tagsApplied: number
+  bookmarksTouched: number
+  undone: boolean
+}
+
+export type AutoTagScope = 'untagged' | 'all' | 'ids'
+
+export interface StartJobOptions {
+  /** Auto-tag jobs: which bookmarks to consider (default: those without any tags). */
+  scope?: AutoTagScope
+  ids?: number[]
+  useLlm?: boolean
 }
 
 export interface Settings {
@@ -110,6 +233,11 @@ export interface Settings {
   sort: SortKey
   direction: SortDirection
   sidebarWidth: number
+  tagging: TaggingSettings
+}
+
+export type SettingsPatch = Partial<Omit<Settings, 'tagging'>> & {
+  tagging?: Partial<Omit<TaggingSettings, 'llm'>> & { llm?: Partial<LlmSettings> }
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -117,7 +245,8 @@ export const DEFAULT_SETTINGS: Settings = {
   view: 'list',
   sort: 'created',
   direction: 'desc',
-  sidebarWidth: 260
+  sidebarWidth: 260,
+  tagging: DEFAULT_TAGGING
 }
 
 export interface ImportResult {
@@ -189,7 +318,7 @@ export interface CairnApi {
   }
   tools: {
     findDuplicates(): Promise<Bookmark[][]>
-    startJob(kind: JobKind): Promise<string | null>
+    startJob(kind: JobKind, options?: StartJobOptions): Promise<string | null>
     cancelJob(id: string): Promise<void>
   }
   data: {
@@ -199,7 +328,12 @@ export interface CairnApi {
   }
   settings: {
     get(): Promise<Settings>
-    set(patch: Partial<Settings>): Promise<Settings>
+    /** Merges the patch into the saved settings (`tagging` and `tagging.llm` are merged field by field). */
+    set(patch: SettingsPatch): Promise<Settings>
+  }
+  tagging: {
+    /** Suggests tags for a saved bookmark or a draft. The built-in engine answers instantly; the local LLM (if enabled and asked for) may take seconds. */
+    suggest(target: TaggingTarget, withLlm: boolean): Promise<SuggestResult>
   }
   app: {
     version(): Promise<string>

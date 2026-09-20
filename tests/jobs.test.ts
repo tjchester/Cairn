@@ -334,7 +334,11 @@ describe('fetch-details job', () => {
     expect(repo.getBookmark(gone.id)).toMatchObject({ title: 'gone.example', faviconUrl: null }) // 404: nothing applied
     expect(repo.getBookmark(down.id)).toMatchObject({ title: 'down.example', coverUrl: null })
     expect(calls['down.example']).toBe(3) // tried three times, then left for a later run
-    expect(last.summary).toBe('2 bookmarks refreshed, 2 could not be fetched (run it again later)')
+    expect(last.summary).toBe('2 bookmarks refreshed, 1 returned an error page, 1 could not be reached (run it again later)')
+    // "Missing" now means "never successfully fetched": only the unreachable site is asked again next time.
+    expect(repo.getSignals(gone.id)).not.toBeNull()
+    expect(repo.getSignals(down.id)).toBeNull()
+    expect(repo.listForJob('missing-metadata').map((b) => b.id)).toEqual([down.id])
   })
 
   it('waits out an outage instead of failing everything', async () => {

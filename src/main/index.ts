@@ -8,6 +8,7 @@ import { applyTheme, readSettings, registerIpc } from './ipc'
 import { buildMenu, focusedOrFirstWindow } from './menu'
 import { JobRunner } from './services/jobs'
 import { createFileLogger } from './services/logger'
+import { TaggingService } from './tagging/service'
 import { createMainWindow, isTrustedUrl, showLegalDocs } from './window'
 
 // Tests (and portable installs) can relocate all app data.
@@ -50,7 +51,8 @@ if (!app.requestSingleInstanceLock()) {
       log: createFileLogger(logFile)
     })
 
-    registerIpc({ repo, jobs, isTrustedUrl, getWindow: () => mainWindow })
+    const tagging = new TaggingService(repo, () => readSettings(repo).tagging)
+    registerIpc({ repo, jobs, tagging, isTrustedUrl, getWindow: () => mainWindow })
 
     buildMenu({
       send: (action: MenuAction) => sendToWindow('menu:action', action),

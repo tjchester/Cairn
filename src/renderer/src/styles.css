@@ -1277,3 +1277,82 @@ kbd {
     transition: none !important;
   }
 }
+
+/* ------------------------------------------------------------- auto-tagging */
+.chip.auto,
+.tag-pill.auto {
+  background: transparent;
+  outline: 1px dashed color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: -1px;
+}
+.tag-pill.auto {
+  color: var(--accent);
+}
+.suggest-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--muted);
+}
+.suggest-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 8px 1px 6px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.suggest-chip:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.suggest-chip.existing {
+  border-style: solid;
+}
+.suggest-chip.llm {
+  border-color: var(--warn);
+}
+.suggest-status {
+  font-size: 12px;
+}
+.suggest-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+.settings-note {
+  margin: 6px 0 10px;
+  font-size: 12px;
+}
+.field.inline {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.field.inline select {
+  width: auto;
+}
+.rules summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+textarea.mono {
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+}
+code {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  font-size: 12px;
+}

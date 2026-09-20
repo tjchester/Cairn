@@ -3,6 +3,7 @@ import type { JobKind, JobProgress, LinkStatus } from '@shared/types'
 import { domainOf } from '@shared/url'
 import type { Repo } from '../db/repo'
 import {
+  EMPTY_SIGNALS,
   attemptLink,
   fetchMetadata,
   isRateLimitStatus,
@@ -304,6 +305,7 @@ export class JobRunner {
     const counts: Record<LinkStatus, number> = { ok: 0, broken: 0, unknown: 0 }
     let updated = 0
     let failed = 0
+    let errored = 0
     let lastEmit = 0
     const recentlyWorking: string[] = []
 
@@ -406,10 +408,14 @@ export class JobRunner {
               if (outcome.kind === 'cancelled') return
               if (outcome.kind === 'defer') return { deferMs: outcome.ms }
               if (outcome.kind === 'done' && outcome.value.status !== null && outcome.value.status < 400) {
-                this.repo.applyMetadata(task.id, outcome.value)
+                this.repo.applyMetadata(task.id, { ...outcome.value, signals: outcome.value.signals ?? EMPTY_SIGNALS })
                 updated++
+              } else if (outcome.kind === 'done') {
+                // The page answered with an error: there is nothing to learn, so do not ask again next time.
+                this.repo.setSignals(task.id, EMPTY_SIGNALS)
+                errored++
               } else {
-                failed++ // unreachable, or an error page: nothing to learn (a later run tries again)
+                failed++ // could not be reached this time: it stays in the list for the next run
               }
             }
             progress.done++
@@ -430,7 +436,9 @@ export class JobRunner {
       progress.paused = false
       progress.summary = isLinkCheck
         ? `${counts.broken} broken, ${counts.ok} working, ${counts.unknown} inconclusive`
-        : `${updated} bookmarks refreshed${failed > 0 ? `, ${failed} could not be fetched (run it again later)` : ''}`
+        : `${updated} bookmarks refreshed` +
+          (errored > 0 ? `, ${errored} returned an error page` : '') +
+          (failed > 0 ? `, ${failed} could not be reached (run it again later)` : '')
       log('job-end', { job: job.kind, done: progress.done, total: progress.total, cancelled: progress.cancelled, summary: progress.summary })
       tick(true)
     }

@@ -10,6 +10,7 @@ import {
   type JobProgress,
   type Scope,
   type Settings,
+  type SettingsPatch,
   type TagInfo
 } from '@shared/types'
 import type { IconName } from './icons'
@@ -75,7 +76,7 @@ interface Store {
 
   setScope(scope: Scope): void
   setSearch(text: string): void
-  updateSettings(patch: Partial<Settings>): Promise<void>
+  updateSettings(patch: SettingsPatch): Promise<void>
   toggleSidebar(): void
   toggleExpanded(id: number): void
 
@@ -269,12 +270,15 @@ export const useStore = create<Store>((set, get) => {
 
     async updateSettings(patch) {
       const previous = get().settings
-      set({ settings: { ...previous, ...patch } })
+      // Simple settings apply at once; the nested tagging block waits for the saved (merged, validated) result.
+      const { tagging: _tagging, ...simple } = patch
+      set({ settings: { ...previous, ...simple } })
       const saved = await guard(() => api.settings.set(patch))
       if (!saved) {
         set({ settings: previous })
         return
       }
+      set({ settings: saved })
       if (patch.sort !== undefined || patch.direction !== undefined) await get().reload()
     },
 

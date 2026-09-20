@@ -9,8 +9,13 @@ import type {
   Collection,
   Counts,
   LinkStatus,
+  PageSignals,
+  ProposalGroup,
+  ProposalItem,
   Scope,
-  TagInfo
+  SuggestionOrigin,
+  TagInfo,
+  TagRunInfo
 } from '@shared/types'
 import { coerceUrl, domainOf, isHttpUrl, urlKey } from '@shared/url'
 import { buildSearchClauses, parseSearch, type SqlValue } from './search'
@@ -26,12 +31,47 @@ const MAX_TAG = 50
 const MAX_TAGS_PER_BOOKMARK = 50
 const CHUNK = 500
 
+// Explicit columns (not b.*) so the bulky search_text and signals never travel with list queries.
 const BOOKMARK_SELECT = `
-  SELECT b.*,
+  SELECT b.id, b.collection_id, b.url, b.title, b.note, b.excerpt, b.cover_url, b.favicon_url, b.domain,
+    b.favorite, b.status, b.http_status, b.last_checked_at, b.created_at, b.updated_at, b.deleted_at,
     (SELECT group_concat(t.name, char(31))
        FROM bookmark_tags bt JOIN tags t ON t.id = bt.tag_id
-      WHERE bt.bookmark_id = b.id) AS tag_names
+      WHERE bt.bookmark_id = b.id) AS tag_names,
+    (SELECT group_concat(t.name, char(31))
+       FROM bookmark_tags bt JOIN tags t ON t.id = bt.tag_id
+      WHERE bt.bookmark_id = b.id AND bt.source <> 'user') AS auto_tag_names
   FROM bookmarks b`
+
+type Provenance = { source: SuggestionOrigin; runId: number | null }
+
+/** Parses the stored page signals, tolerating anything unexpected. */
+function parseSignals(raw: unknown): PageSignals | null {
+  if (typeof raw !== 'string' || !raw) return null
+  try {
+    const v = JSON.parse(raw) as Partial<PageSignals> | null
+    if (!v || typeof v !== 'object') return null
+    return {
+      keywords: Array.isArray(v.keywords) ? v.keywords.filter((k): k is string => typeof k === 'string') : [],
+      ogType: typeof v.ogType === 'string' ? v.ogType : null,
+      siteName: typeof v.siteName === 'string' ? v.siteName : null,
+      lang: typeof v.lang === 'string' ? v.lang : null,
+      section: typeof v.section === 'string' ? v.section : null,
+      text: typeof v.text === 'string' ? v.text : ''
+    }
+  } catch {
+    return null
+  }
+}
+
+export interface TaggingCandidate {
+  id: number
+  url: string
+  title: string
+  excerpt: string
+  tags: string[]
+  signals: PageSignals | null
+}
 
 const SORT_COLUMNS = {
   created: 'b.created_at',
@@ -81,6 +121,7 @@ export function normalizeTags(tags: readonly string[] | undefined): string[] {
 
 function toBookmark(row: Row): Bookmark {
   const tagNames = typeof row.tag_names === 'string' && row.tag_names ? row.tag_names.split(TAG_SEPARATOR) : []
+  const autoNames = typeof row.auto_tag_names === 'string' && row.auto_tag_names ? row.auto_tag_names.split(TAG_SEPARATOR) : []
   return {
     id: Number(row.id),
     url: String(row.url),
@@ -92,6 +133,7 @@ function toBookmark(row: Row): Bookmark {
     domain: String(row.domain),
     collectionId: row.collection_id === null ? null : Number(row.collection_id),
     tags: tagNames.sort((a, b) => a.localeCompare(b)),
+    autoTags: autoNames.sort((a, b) => a.localeCompare(b)),
     favorite: Number(row.favorite) === 1,
     status: row.status as LinkStatus,
     httpStatus: row.http_status === null ? null : Number(row.http_status),
@@ -316,8 +358,8 @@ export class Repo {
     const id = this.tx(() => {
       const newId = this.insert(
         `INSERT INTO bookmarks
-           (collection_id, url, url_key, title, note, excerpt, cover_url, favicon_url, domain, favorite, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (collection_id, url, url_key, title, note, excerpt, cover_url, favicon_url, domain, favorite, created_at, updated_at, signals)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         collectionId,
         url,
         urlKey(url),
@@ -329,9 +371,12 @@ export class Repo {
         domain,
         input.favorite ? 1 : 0,
         input.createdAt ?? now,
-        now
+        now,
+        input.signals ? JSON.stringify(input.signals) : null
       )
-      this.setTags(newId, input.tags)
+      const provenance: Record<string, Provenance> = {}
+      for (const [tag, source] of Object.entries(input.tagSources ?? {})) provenance[tag.replace(/^#+/, '').trim().toLowerCase()] = { source, runId: null }
+      this.setTags(newId, input.tags, provenance)
       this.refreshSearchText([newId])
       return newId
     })
@@ -538,13 +583,32 @@ export class Repo {
     ).map((r) => String(r.name))
   }
 
-  private setTags(bookmarkId: number, tags: readonly string[] | undefined): void {
+  /**
+   * Replaces a bookmark's tags. Tags that stay keep their origin (user / builtin / llm); new ones are the
+   * user's unless `provenance` (keyed by lower-cased tag) says they were added automatically.
+   */
+  private setTags(bookmarkId: number, tags: readonly string[] | undefined, provenance: Record<string, Provenance> = {}): void {
     const names = normalizeTags(tags)
+    const previous = new Map<string, { source: string; runId: number | null }>()
+    for (const r of this.all(
+      'SELECT t.name AS name, bt.source AS source, bt.run_id AS run_id FROM bookmark_tags bt JOIN tags t ON t.id = bt.tag_id WHERE bt.bookmark_id = ?',
+      bookmarkId
+    )) {
+      previous.set(String(r.name).toLowerCase(), { source: String(r.source), runId: r.run_id === null ? null : Number(r.run_id) })
+    }
     this.run('DELETE FROM bookmark_tags WHERE bookmark_id = ?', bookmarkId)
     for (const name of names) {
+      const key = name.toLowerCase()
+      const origin = provenance[key] ?? previous.get(key) ?? { source: 'user', runId: null }
       this.run('INSERT OR IGNORE INTO tags (name) VALUES (?)', name)
       const tag = this.get('SELECT id FROM tags WHERE name = ?', name) as Row
-      this.run('INSERT OR IGNORE INTO bookmark_tags (bookmark_id, tag_id) VALUES (?, ?)', bookmarkId, Number(tag.id))
+      this.run(
+        'INSERT OR IGNORE INTO bookmark_tags (bookmark_id, tag_id, source, run_id) VALUES (?, ?, ?, ?)',
+        bookmarkId,
+        Number(tag.id),
+        origin.source,
+        origin.runId
+      )
     }
     this.pruneTags()
   }
@@ -619,9 +683,13 @@ export class Repo {
    * Applies freshly scraped metadata. Title and description only fill blanks (or the auto-generated
    * title); cover and favicon are replaced whenever a new one was found.
    */
-  applyMetadata(id: number, meta: { title?: string; excerpt?: string; coverUrl?: string | null; faviconUrl?: string | null }): Bookmark {
+  applyMetadata(
+    id: number,
+    meta: { title?: string; excerpt?: string; coverUrl?: string | null; faviconUrl?: string | null; signals?: PageSignals | null }
+  ): Bookmark {
     const existing = this.getBookmark(id)
     if (!existing) throw new Error('Bookmark not found')
+    if (meta.signals) this.setSignals(id, meta.signals)
     const autoTitle = !existing.title || existing.title === existing.domain || existing.title === existing.url
     const patch: BookmarkPatch = {}
     if (meta.title && autoTitle) patch.title = meta.title
@@ -645,9 +713,13 @@ export class Repo {
     )
   }
 
-  /** IDs and URLs of active bookmarks, optionally restricted to those matching a predicate SQL fragment. */
+  /**
+   * IDs and URLs of active bookmarks for a bulk job. `missing-metadata` means "never successfully fetched"
+   * (no stored page signals): pages that answered but have no cover image are not asked again, while failed
+   * lookups stay in the list until they succeed.
+   */
   listForJob(kind: 'all' | 'missing-metadata'): { id: number; url: string }[] {
-    const extra = kind === 'missing-metadata' ? "AND (cover_url IS NULL OR cover_url = '' OR favicon_url IS NULL OR favicon_url = '')" : ''
+    const extra = kind === 'missing-metadata' ? 'AND signals IS NULL' : ''
     return this.all(`SELECT id, url FROM bookmarks WHERE deleted_at IS NULL ${extra} ORDER BY id`).map((r) => ({
       id: Number(r.id),
       url: String(r.url)
@@ -656,6 +728,246 @@ export class Repo {
 
   allActiveBookmarks(): Bookmark[] {
     return this.all(`${BOOKMARK_SELECT} WHERE b.deleted_at IS NULL ORDER BY b.id`).map(toBookmark)
+  }
+
+  // ------------------------------------------------------------- auto-tagging
+
+  getSignals(id: number): PageSignals | null {
+    return parseSignals(this.get('SELECT signals FROM bookmarks WHERE id = ?', id)?.signals)
+  }
+
+  setSignals(id: number, signals: PageSignals | null): void {
+    this.run('UPDATE bookmarks SET signals = ? WHERE id = ?', signals ? JSON.stringify(signals) : null, id)
+  }
+
+  private static readonly CANDIDATE_SELECT =
+    'SELECT b.id, b.url, b.title, b.excerpt, b.signals,' +
+    ' (SELECT group_concat(t.name, char(31)) FROM bookmark_tags bt JOIN tags t ON t.id = bt.tag_id WHERE bt.bookmark_id = b.id) AS tag_names' +
+    ' FROM bookmarks b'
+
+  private toCandidate(row: Row): TaggingCandidate {
+    return {
+      id: Number(row.id),
+      url: String(row.url),
+      title: String(row.title),
+      excerpt: String(row.excerpt),
+      tags: typeof row.tag_names === 'string' && row.tag_names ? row.tag_names.split(TAG_SEPARATOR) : [],
+      signals: parseSignals(row.signals)
+    }
+  }
+
+  getTaggingCandidate(id: number): TaggingCandidate | null {
+    const row = this.get(Repo.CANDIDATE_SELECT + ' WHERE b.id = ?', id)
+    return row ? this.toCandidate(row) : null
+  }
+
+  /** Bookmarks to consider for auto-tagging: those with no tags, everything, or a given set. */
+  listForTagging(scope: 'untagged' | 'all' | 'ids', ids: number[] = []): TaggingCandidate[] {
+    const rows: Row[] = []
+    if (scope === 'ids') {
+      for (const part of chunk(ids)) {
+        rows.push(...this.all(Repo.CANDIDATE_SELECT + ' WHERE b.deleted_at IS NULL AND b.id IN (' + placeholders(part.length) + ') ORDER BY b.id', ...part))
+      }
+    } else {
+      const untagged = scope === 'untagged' ? ' AND NOT EXISTS (SELECT 1 FROM bookmark_tags x WHERE x.bookmark_id = b.id)' : ''
+      rows.push(...this.all(Repo.CANDIDATE_SELECT + ' WHERE b.deleted_at IS NULL' + untagged + ' ORDER BY b.id'))
+    }
+    return rows.map((row) => this.toCandidate(row))
+  }
+
+  /**
+   * Adds tags to a bookmark (keeping the ones it has), recording that they were added automatically and by
+   * which run. Returns the tags that were actually new. Does not touch the bookmark's "updated" date.
+   */
+  addAutoTags(bookmarkId: number, tags: readonly string[], source: SuggestionOrigin, runId: number | null): string[] {
+    const current = this.tagNamesFor(bookmarkId)
+    const have = new Set(current.map((t) => t.toLowerCase()))
+    const added = normalizeTags(tags).filter((t) => !have.has(t.toLowerCase()))
+    if (added.length === 0) return []
+    this.tx(() => {
+      const provenance: Record<string, Provenance> = {}
+      for (const tag of added) provenance[tag.toLowerCase()] = { source, runId }
+      this.setTags(bookmarkId, [...current, ...added], provenance)
+      this.refreshSearchText([bookmarkId])
+    })
+    return added
+  }
+
+  // -- runs (one per auto-tag job or review action, so it can be undone as a unit)
+
+  createRun(kind: string, mode: string): number {
+    return this.insert('INSERT INTO tag_runs (kind, mode, created_at) VALUES (?, ?, ?)', kind, mode, new Date().toISOString())
+  }
+
+  finishRun(id: number, tagsApplied: number, bookmarksTouched: number): void {
+    this.run('UPDATE tag_runs SET tags_applied = ?, bookmarks_touched = ? WHERE id = ?', tagsApplied, bookmarksTouched, id)
+  }
+
+  /** The most recent run that added tags and has not been undone. */
+  lastRun(): TagRunInfo | null {
+    const r = this.get('SELECT * FROM tag_runs WHERE undone = 0 AND tags_applied > 0 ORDER BY id DESC LIMIT 1')
+    if (!r) return null
+    return {
+      id: Number(r.id),
+      kind: String(r.kind),
+      mode: String(r.mode),
+      createdAt: String(r.created_at),
+      tagsApplied: Number(r.tags_applied),
+      bookmarksTouched: Number(r.bookmarks_touched),
+      undone: Number(r.undone) === 1
+    }
+  }
+
+  /** Removes the automatic tags a run added (tags the user added themselves are never touched). */
+  undoRun(runId: number): number {
+    return this.tx(() => {
+      const affected = this.all("SELECT DISTINCT bookmark_id AS id FROM bookmark_tags WHERE run_id = ? AND source <> 'user'", runId).map((r) => Number(r.id))
+      const removed = this.run("DELETE FROM bookmark_tags WHERE run_id = ? AND source <> 'user'", runId)
+      this.run('UPDATE tag_runs SET undone = 1 WHERE id = ?', runId)
+      this.pruneTags()
+      this.refreshSearchText(affected)
+      return removed
+    })
+  }
+
+  /** Removes every automatically added tag from every bookmark. */
+  removeAutoTags(): number {
+    return this.tx(() => {
+      const affected = this.all("SELECT DISTINCT bookmark_id AS id FROM bookmark_tags WHERE source <> 'user'").map((r) => Number(r.id))
+      const removed = this.run("DELETE FROM bookmark_tags WHERE source <> 'user'")
+      this.pruneTags()
+      this.refreshSearchText(affected)
+      return removed
+    })
+  }
+
+  // -- proposals (suggestions waiting for review)
+
+  addProposals(runId: number | null, bookmarkId: number, items: { tag: string; score: number; origin: SuggestionOrigin; reason: string }[]): number {
+    let added = 0
+    for (const item of items) {
+      added += this.run(
+        'INSERT OR IGNORE INTO tag_proposals (run_id, bookmark_id, tag, score, origin, reason) VALUES (?, ?, ?, ?, ?, ?)',
+        runId,
+        bookmarkId,
+        item.tag,
+        item.score,
+        item.origin,
+        item.reason
+      )
+    }
+    return added
+  }
+
+  pendingProposalCount(): number {
+    const row = this.get(
+      "SELECT COUNT(*) AS n FROM tag_proposals p JOIN bookmarks b ON b.id = p.bookmark_id WHERE p.status = 'pending' AND b.deleted_at IS NULL"
+    )
+    return Number(row?.n ?? 0)
+  }
+
+  proposalGroups(): ProposalGroup[] {
+    return this.all(
+      `SELECT p.tag AS tag, COUNT(*) AS n, AVG(p.score) AS avg_score, GROUP_CONCAT(DISTINCT p.origin) AS origins,
+              EXISTS (SELECT 1 FROM bookmark_tags bt JOIN tags t ON t.id = bt.tag_id WHERE t.name = p.tag) AS existing
+         FROM tag_proposals p JOIN bookmarks b ON b.id = p.bookmark_id
+        WHERE p.status = 'pending' AND b.deleted_at IS NULL
+        GROUP BY p.tag
+        ORDER BY n DESC, p.tag COLLATE NOCASE`
+    ).map((r) => ({
+      tag: String(r.tag),
+      count: Number(r.n),
+      avgScore: Number(r.avg_score),
+      existing: Number(r.existing) === 1,
+      origins: String(r.origins).split(',').filter((o): o is SuggestionOrigin => o === 'builtin' || o === 'llm')
+    }))
+  }
+
+  proposalItems(tag: string): ProposalItem[] {
+    return this.all(
+      `SELECT p.id AS id, p.bookmark_id AS bookmark_id, b.title AS title, b.url AS url, p.score AS score, p.reason AS reason, p.origin AS origin
+         FROM tag_proposals p JOIN bookmarks b ON b.id = p.bookmark_id
+        WHERE p.tag = ? AND p.status = 'pending' AND b.deleted_at IS NULL
+        ORDER BY p.score DESC, b.id`,
+      tag
+    ).map((r) => ({
+      proposalId: Number(r.id),
+      bookmarkId: Number(r.bookmark_id),
+      title: String(r.title),
+      url: String(r.url),
+      score: Number(r.score),
+      reason: String(r.reason),
+      origin: (r.origin === 'llm' ? 'llm' : 'builtin') as SuggestionOrigin
+    }))
+  }
+
+  private pendingRows(tag: string, bookmarkIds?: number[]): { id: number; bookmarkId: number; origin: SuggestionOrigin }[] {
+    const base =
+      "SELECT p.id AS id, p.bookmark_id AS bookmark_id, p.origin AS origin FROM tag_proposals p JOIN bookmarks b ON b.id = p.bookmark_id WHERE p.tag = ? AND p.status = 'pending' AND b.deleted_at IS NULL"
+    const rows: Row[] = []
+    if (bookmarkIds) {
+      for (const part of chunk(bookmarkIds)) rows.push(...this.all(base + ' AND p.bookmark_id IN (' + placeholders(part.length) + ')', tag, ...part))
+    } else {
+      rows.push(...this.all(base, tag))
+    }
+    return rows.map((r) => ({ id: Number(r.id), bookmarkId: Number(r.bookmark_id), origin: (r.origin === 'llm' ? 'llm' : 'builtin') as SuggestionOrigin }))
+  }
+
+  /** Applies the pending proposals for a tag (all of them, or just the given bookmarks) as one undoable run. */
+  applyProposals(tag: string, bookmarkIds?: number[]): { applied: number; runId: number | null } {
+    return this.tx(() => {
+      const rows = this.pendingRows(tag, bookmarkIds)
+      if (rows.length === 0) return { applied: 0, runId: null }
+      const runId = this.createRun('review', 'suggest')
+      let applied = 0
+      for (const row of rows) {
+        applied += this.addAutoTags(row.bookmarkId, [tag], row.origin, runId).length
+        this.run('DELETE FROM tag_proposals WHERE id = ?', row.id)
+      }
+      this.finishRun(runId, applied, applied)
+      return { applied, runId }
+    })
+  }
+
+  /** Marks proposals as rejected; they are remembered so a later run does not suggest them again. */
+  rejectProposals(tag: string, bookmarkIds?: number[]): number {
+    return this.tx(() => {
+      let changed = 0
+      if (bookmarkIds) {
+        for (const part of chunk(bookmarkIds)) {
+          changed += this.run(
+            "UPDATE tag_proposals SET status = 'rejected' WHERE tag = ? AND status = 'pending' AND bookmark_id IN (" + placeholders(part.length) + ')',
+            tag,
+            ...part
+          )
+        }
+      } else {
+        changed = this.run("UPDATE tag_proposals SET status = 'rejected' WHERE tag = ? AND status = 'pending'", tag)
+      }
+      return changed
+    })
+  }
+
+  /** Never suggest this tag again, and drop its pending proposals. */
+  neverSuggest(tag: string): number {
+    return this.tx(() => {
+      const name = normalizeTags([tag])[0]
+      if (!name) return 0
+      this.run('INSERT OR IGNORE INTO tag_blocklist (tag) VALUES (?)', name)
+      return this.rejectProposals(name)
+    })
+  }
+
+  discardPendingProposals(): number {
+    return this.run("UPDATE tag_proposals SET status = 'rejected' WHERE status = 'pending'")
+  }
+
+  blockedTags(): string[] {
+    return this.all('SELECT tag FROM tag_blocklist ORDER BY tag COLLATE NOCASE').map((r) => String(r.tag))
+  }
+
+  unblockTag(tag: string): void {
+    this.run('DELETE FROM tag_blocklist WHERE tag = ?', tag)
   }
 
   // ---------------------------------------------------------------- settings

@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import type { TagSuggestion } from '@shared/types'
 import { Icon } from '../icons'
 import { useStore } from '../store'
 import { buildTree, flattenTree } from '../util'
@@ -236,7 +237,19 @@ export function CollectionSelect({
   )
 }
 
-export function TagInput({ value, onChange, placeholder = 'Add tags…' }: { value: string[]; onChange: (tags: string[]) => void; placeholder?: string }): React.JSX.Element {
+export function TagInput({
+  value,
+  onChange,
+  placeholder = 'Add tags…',
+  autoTags = []
+}: {
+  value: string[]
+  onChange: (tags: string[]) => void
+  placeholder?: string
+  /** Tags in `value` that were added automatically (shown with a dashed outline). */
+  autoTags?: readonly string[]
+}): React.JSX.Element {
+  const auto = new Set(autoTags.map((t) => t.toLowerCase()))
   const known = useStore((s) => s.tags)
   const [draft, setDraft] = useState('')
   const [focused, setFocused] = useState(false)
@@ -261,7 +274,8 @@ export function TagInput({ value, onChange, placeholder = 'Add tags…' }: { val
   return (
     <div className={`tag-input${focused ? ' focused' : ''}`} onClick={(e) => e.currentTarget.querySelector('input')?.focus()}>
       {value.map((tag) => (
-        <span className="chip" key={tag}>
+        <span className={auto.has(tag.toLowerCase()) ? 'chip auto' : 'chip'} key={tag} title={auto.has(tag.toLowerCase()) ? 'Added automatically' : undefined}>
+          {auto.has(tag.toLowerCase()) && <Icon name="sparkles" size={10} />}
           {tag}
           <button type="button" className="chip-x" aria-label={`Remove tag ${tag}`} onClick={() => onChange(value.filter((t) => t !== tag))}>
             <Icon name="close" size={10} />
@@ -308,6 +322,45 @@ export function TagInput({ value, onChange, placeholder = 'Add tags…' }: { val
           ))}
         </ul>
       )}
+    </div>
+  )
+}
+
+/** A row of suggested tags; clicking one accepts it. Tags in `taken` are hidden. */
+export function TagSuggestions({
+  suggestions,
+  taken,
+  busy,
+  status,
+  onPick
+}: {
+  suggestions: TagSuggestion[]
+  taken: readonly string[]
+  /** Something (the local model) is still working; shown as a hint after the chips. */
+  busy?: string | null
+  /** A message about the outcome, e.g. "No suggestions" or a model error. */
+  status?: string | null
+  onPick: (suggestion: TagSuggestion) => void
+}): React.JSX.Element | null {
+  const have = new Set(taken.map((t) => t.toLowerCase()))
+  const visible = suggestions.filter((s) => !have.has(s.tag.toLowerCase()))
+  if (visible.length === 0 && !busy && !status) return null
+  return (
+    <div className="suggest-row" aria-label="Suggested tags">
+      <Icon name="sparkles" size={13} />
+      {visible.map((s) => (
+        <button
+          key={s.tag}
+          type="button"
+          className={'suggest-chip' + (s.origin === 'llm' ? ' llm' : '') + (s.existing ? ' existing' : '')}
+          title={s.reasons.join('\n') + '\nConfidence ' + Math.round(s.score * 100) + '%' + (s.existing ? '\nAlready used in your library' : '')}
+          onClick={() => onPick(s)}
+        >
+          <Icon name="add" size={11} /> {s.tag}
+        </button>
+      ))}
+      {busy && <span className="suggest-status">{busy}</span>}
+      {!busy && status && <span className="suggest-status">{status}</span>}
     </div>
   )
 }

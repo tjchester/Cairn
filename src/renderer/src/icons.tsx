@@ -35,6 +35,7 @@ import {
   IconSettings,
   IconSortAscending,
   IconSortDescending,
+  IconSparkles,
   IconStar,
   IconSunMoon,
   IconTag,
@@ -93,7 +94,8 @@ const ICONS = {
   keyboard: IconKeyboard,
   undo: IconArrowBackUp,
   web: IconWorld,
-  stop: IconPlayerStop
+  stop: IconPlayerStop,
+  sparkles: IconSparkles
 } satisfies Record<string, TablerIcon>
 
 export type IconName = keyof typeof ICONS

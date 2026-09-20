@@ -58,7 +58,7 @@ describe('Cairn (real app)', () => {
     expect(isolation.require).toBe('undefined')
     expect(isolation.process).toBe('undefined')
     expect(isolation.ipcRenderer).toBe('undefined')
-    expect(isolation.api).toEqual(['app', 'bookmarks', 'collections', 'data', 'metadata', 'on', 'settings', 'tags', 'tools'])
+    expect(isolation.api).toEqual(['app', 'bookmarks', 'collections', 'data', 'metadata', 'on', 'settings', 'tagging', 'tags', 'tools'])
 
     const csp = await page.locator('meta[http-equiv="Content-Security-Policy"]').getAttribute('content')
     expect(csp).toContain("default-src 'none'")
@@ -262,6 +262,77 @@ describe('Cairn (real app)', () => {
     await page.getByRole('menuitem', { name: /Delete collection/ }).click()
     await page.getByRole('dialog').getByRole('button', { name: 'Delete collection' }).click()
     await expect(page.locator('.nav-item', { hasText: 'Temp' })).toHaveCount(0)
+  })
+
+  it('suggests tags in the Add dialog, hides the ones you took, and saves accepted ones as yours', async () => {
+    await page.getByRole('button', { name: 'Add' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Add bookmark' })
+    await dialog.getByLabel('Link').fill('unreachable.invalid/docs/tutorial/intro-guide.pdf')
+    const chips = dialog.getByLabel('Suggested tags')
+    await expect(chips.getByRole('button', { name: /pdf/ })).toBeVisible({ timeout: 20_000 })
+    await expect(chips.getByRole('button', { name: /docs/ })).toBeVisible()
+    await shot('12-suggestions')
+    await chips.getByRole('button', { name: /pdf/ }).click()
+    await expect(dialog.locator('.tag-input .chip', { hasText: 'pdf' })).toBeVisible()
+    await expect(chips.getByRole('button', { name: /pdf/ })).toBeHidden() // a tag you took is no longer offered
+    await dialog.getByRole('button', { name: 'Save' }).click()
+    await expect(page.getByText('Bookmark saved')).toBeVisible()
+
+    const saved = await cairn((api) => api.bookmarks.query({ scope: { kind: 'all' }, search: 'intro-guide', sort: 'created', direction: 'desc', limit: 5, offset: 0 }))
+    expect(saved.items[0]).toMatchObject({ tags: ['pdf'], autoTags: [] }) // clicked by the user, so it is the user's own tag
+  })
+
+  it('in Auto mode fills in tags for you and marks them as automatic', async () => {
+    await page.getByRole('button', { name: 'Settings' }).click()
+    await expect(page.getByText('Auto-tagging')).toBeVisible()
+    await page.getByRole('button', { name: 'Auto', exact: true }).click()
+    await expect(page.getByText(/Also adds them for you/)).toBeVisible()
+    await shot('13-settings-tagging')
+    await page.keyboard.press('Escape')
+
+    await page.getByRole('button', { name: 'Add' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Add bookmark' })
+    await dialog.getByLabel('Link').fill('unreachable.invalid/recipes/pancakes.pdf')
+    await expect(dialog.locator('.tag-input .chip.auto', { hasText: 'pdf' })).toBeVisible({ timeout: 20_000 })
+    await expect(dialog.locator('.tag-input .chip.auto', { hasText: 'recipes' })).toBeVisible()
+    await dialog.getByRole('button', { name: 'Save' }).click()
+    await expect(page.getByText('Bookmark saved').last()).toBeVisible()
+
+    const saved = await cairn((api) => api.bookmarks.query({ scope: { kind: 'all' }, search: 'pancakes', sort: 'created', direction: 'desc', limit: 5, offset: 0 }))
+    expect(saved.items[0]?.autoTags).toEqual(expect.arrayContaining(['pdf', 'recipes']))
+    await expect(page.locator('li.bm .tag-pill.auto', { hasText: 'recipes' })).toBeVisible() // dashed pill in the list
+
+    // back to Suggest for the remaining tests
+    await page.getByRole('button', { name: 'Settings' }).click()
+    await page.getByRole('button', { name: 'Suggest', exact: true }).click()
+    await page.keyboard.press('Escape')
+  })
+
+  it('offers Suggest tags in the editor', async () => {
+    await rows().filter({ hasText: 'Rust Programming Language' }).click()
+    await page.keyboard.press('e')
+    const editor = page.getByRole('complementary', { name: 'Edit bookmark' })
+    await editor.getByRole('button', { name: /Suggest tags/ }).click()
+    const chips = editor.getByLabel('Suggested tags')
+    await expect(chips.getByRole('button', { name: /programming/ })).toBeVisible()
+    await chips.getByRole('button', { name: /programming/ }).click()
+    await expect(editor.locator('.tag-input .chip', { hasText: 'programming' })).toBeVisible()
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('Escape')
+  })
+
+  it('rejects malformed custom rules with a clear message and keeps the old ones', async () => {
+    await page.getByRole('button', { name: 'Settings' }).click()
+    await page.getByText('Custom rules (advanced)').click()
+    const box = page.getByLabel('Custom tagging rules')
+    await box.fill('{nope')
+    await box.blur()
+    await expect(page.getByText(/Custom rules: Not valid JSON/)).toBeVisible()
+    await box.fill('{"domains": {"example.net": ["my-tag"]}}')
+    await box.blur()
+    const settings = await cairn((api) => api.settings.get())
+    expect(settings.tagging.userRules).toContain('example.net')
+    await page.keyboard.press('Escape')
   })
 
   it('has no renderer errors or CSP violations', () => {

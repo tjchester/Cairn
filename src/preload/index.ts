@@ -55,6 +55,9 @@ const api: CairnApi = {
     get: () => invoke('settings:get'),
     set: (patch) => invoke('settings:set', patch)
   },
+  tagging: {
+    suggest: (target, withLlm) => invoke('tagging:suggest', target, withLlm)
+  },
   app: {
     version: () => invoke('app:version'),
     platform: process.platform,

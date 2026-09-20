@@ -83,7 +83,7 @@ const BookmarkRow = memo(function BookmarkRow({ bookmark, view, selected, editin
       {bookmark.tags.map((tag) => (
         <button
           key={tag}
-          className="tag-pill"
+          className={bookmark.autoTags.includes(tag) ? 'tag-pill auto' : 'tag-pill'}
           onClick={(e) => {
             e.stopPropagation()
             store().setScope({ kind: 'tag', name: tag })
