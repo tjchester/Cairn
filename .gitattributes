@@ -1,0 +1,24 @@
+# Line endings: text files are stored with LF in the repository and checked out with the native
+# line ending of the current OS (CRLF on Windows, LF on macOS/Linux). Git detects which files are text.
+* text=auto
+
+# Files that must keep a specific line ending on every OS.
+*.sh text eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files: never touch line endings or produce text diffs.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.db binary
+*.sqlite binary
+
+# Generated files: collapse in diffs and exclude from language statistics.
+package-lock.json -diff linguist-generated
+THIRD_PARTY_LICENSES.txt linguist-generated

@@ -1,0 +1,46 @@
+appId: com.cairn.bookmarks
+productName: Cairn
+copyright: Copyright © 2026 Thomas Chester
+
+directories:
+  output: dist
+  buildResources: build
+
+files:
+  - out/**
+  - build/icon.png
+  - package.json
+  - '!**/*.map'
+
+# License texts travel with every build (MIT requires the copyright notices to stay with the code).
+extraResources:
+  - from: LICENSE
+    to: legal/LICENSE
+  - from: THIRD_PARTY_LICENSES.txt
+    to: legal/THIRD_PARTY_LICENSES.txt
+
+asar: true
+icon: build/icon.png
+
+win:
+  target:
+    - nsis
+    - portable
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  # Shows the license during installation and asks the user to accept it.
+  license: build/license.txt
+
+mac:
+  category: public.app-category.productivity
+  target:
+    - dmg
+    - zip
+
+linux:
+  category: Utility
+  maintainer: Thomas Chester
+  target:
+    - AppImage
+    - deb

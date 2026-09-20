@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Cairn app icon. Original artwork, MIT licensed (see LICENSE). -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6d8bff"/>
+      <stop offset="1" stop-color="#2a45c4"/>
+    </linearGradient>
+    <linearGradient id="stone" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dfe5ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="228" fill="url(#bg)"/>
+  <ellipse cx="512" cy="742" rx="292" ry="118" fill="#1c2f8f" opacity="0.28"/>
+  <ellipse cx="512" cy="716" rx="286" ry="118" fill="url(#stone)"/>
+  <ellipse cx="528" cy="536" rx="206" ry="92" fill="url(#stone)" stroke="#2a45c4" stroke-opacity="0.22" stroke-width="10"/>
+  <ellipse cx="506" cy="382" rx="132" ry="68" fill="url(#stone)" stroke="#2a45c4" stroke-opacity="0.22" stroke-width="10"/>
+  <path d="M480 240a14 14 0 0 1 14-14h36a14 14 0 0 1 14 14v96l-32-24-32 24z" fill="#ffd166"/>
+</svg>

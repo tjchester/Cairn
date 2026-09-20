@@ -1,0 +1,598 @@
+import { create } from 'zustand'
+import {
+  DEFAULT_SETTINGS,
+  type Bookmark,
+  type BookmarkPatch,
+  type Collection,
+  type Counts,
+  type ExportFormat,
+  type JobKind,
+  type JobProgress,
+  type Scope,
+  type Settings,
+  type TagInfo
+} from '@shared/types'
+import type { IconName } from './icons'
+import { errorMessage, sameScope } from './util'
+
+const api = window.cairn
+const PAGE_SIZE = 100
+const MAX_DEPTH = 1000
+
+export interface ContextItem {
+  label?: string
+  icon?: IconName
+  color?: string
+  danger?: boolean
+  disabled?: boolean
+  separator?: boolean
+  checked?: boolean
+  onClick?: () => void
+}
+
+export interface Toast {
+  id: number
+  message: string
+  kind: 'info' | 'success' | 'error'
+  action?: { label: string; onClick: () => void }
+}
+
+export type DialogState =
+  | { type: 'add'; urls?: string[] }
+  | { type: 'settings' }
+  | { type: 'tools' }
+  | { type: 'shortcuts' }
+  | { type: 'confirm'; title: string; message: string; confirmLabel: string; danger?: boolean }
+  | { type: 'prompt'; title: string; label: string; initial: string; confirmLabel: string; placeholder?: string }
+
+interface Store {
+  ready: boolean
+  settings: Settings
+  collections: Collection[]
+  counts: Counts
+  tags: TagInfo[]
+  scope: Scope
+  search: string
+  items: Bookmark[]
+  total: number
+  loading: boolean
+  selected: Set<number>
+  anchorId: number | null
+  editingId: number | null
+  sidebarOpen: boolean
+  expanded: Record<number, boolean>
+  dialog: DialogState | null
+  context: { x: number; y: number; items: ContextItem[] } | null
+  toasts: Toast[]
+  job: JobProgress | null
+
+  init(): Promise<void>
+  reload(options?: { keepDepth?: boolean }): Promise<void>
+  loadMore(): Promise<void>
+  refreshMeta(): Promise<void>
+  refreshAll(): Promise<void>
+  reloadSettings(): Promise<void>
+
+  setScope(scope: Scope): void
+  setSearch(text: string): void
+  updateSettings(patch: Partial<Settings>): Promise<void>
+  toggleSidebar(): void
+  toggleExpanded(id: number): void
+
+  selectOnly(id: number): void
+  toggleSelect(id: number): void
+  selectRange(id: number): void
+  selectAll(): void
+  clearSelection(): void
+  moveSelection(delta: number): void
+  setEditing(id: number | null): void
+
+  saveBookmark(id: number, patch: BookmarkPatch): Promise<Bookmark | null>
+  toggleFavorite(ids: number[]): Promise<void>
+  moveToCollection(ids: number[], collectionId: number | null): Promise<void>
+  addTags(ids: number[], tags: string[]): Promise<void>
+  trashIds(ids: number[]): Promise<void>
+  restoreIds(ids: number[]): Promise<void>
+  purgeIds(ids: number[]): Promise<void>
+  emptyTrash(): Promise<void>
+  openBookmark(bookmark: Bookmark): Promise<void>
+  copyLink(bookmark: Bookmark): Promise<void>
+  /** Re-fetches one bookmark's title, description, cover and icon. Returns the updated bookmark, or null on failure. */
+  refreshDetails(id: number): Promise<Bookmark | null>
+
+  createCollection(parentId: number | null): Promise<void>
+  renameCollection(id: number): Promise<void>
+  colorCollection(id: number, color: string | null): Promise<void>
+  deleteCollection(id: number): Promise<void>
+  moveCollection(id: number, parentId: number | null, index: number): Promise<void>
+  renameTag(name: string): Promise<void>
+  deleteTag(name: string): Promise<void>
+
+  importFile(): Promise<void>
+  exportFile(format: ExportFormat): Promise<void>
+  startJob(kind: JobKind): Promise<void>
+  cancelJob(): Promise<void>
+  onJobProgress(progress: JobProgress): void
+
+  openAdd(urls?: string[]): void
+  openDialog(dialog: Extract<DialogState, { type: 'settings' | 'tools' | 'shortcuts' }>): void
+  closeDialog(result?: unknown): void
+  confirm(options: { title: string; message: string; confirmLabel: string; danger?: boolean }): Promise<boolean>
+  prompt(options: { title: string; label: string; initial?: string; confirmLabel: string; placeholder?: string }): Promise<string | null>
+  showContext(x: number, y: number, items: ContextItem[]): void
+  hideContext(): void
+  toast(message: string, kind?: Toast['kind'], action?: Toast['action']): number
+  dismissToast(id: number): void
+}
+
+const emptyCounts: Counts = { all: 0, unsorted: 0, favorites: 0, broken: 0, trash: 0, byCollection: {} }
+
+let requestSeq = 0
+let loadingMore = false
+let searchTimer: ReturnType<typeof setTimeout> | undefined
+let toastSeq = 0
+let dialogResolver: ((value: unknown) => void) | null = null
+
+function loadExpanded(): Record<number, boolean> {
+  try {
+    return JSON.parse(localStorage.getItem('cairn.expanded') ?? '{}') as Record<number, boolean>
+  } catch {
+    return {}
+  }
+}
+
+function saveExpanded(value: Record<number, boolean>): void {
+  try {
+    localStorage.setItem('cairn.expanded', JSON.stringify(value))
+  } catch {
+    // Not persisted; harmless.
+  }
+}
+
+const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`
+
+export const useStore = create<Store>((set, get) => {
+  /** Runs an action, surfacing failures as toasts instead of unhandled rejections. */
+  async function guard<T>(fn: () => Promise<T>): Promise<T | undefined> {
+    try {
+      return await fn()
+    } catch (error) {
+      get().toast(errorMessage(error), 'error')
+      return undefined
+    }
+  }
+
+  const ask = <T>(dialog: DialogState): Promise<T | null> =>
+    new Promise((resolve) => {
+      dialogResolver?.(null)
+      dialogResolver = resolve as (value: unknown) => void
+      set({ dialog })
+    })
+
+  return {
+    ready: false,
+    settings: DEFAULT_SETTINGS,
+    collections: [],
+    counts: emptyCounts,
+    tags: [],
+    scope: { kind: 'all' },
+    search: '',
+    items: [],
+    total: 0,
+    loading: false,
+    selected: new Set(),
+    anchorId: null,
+    editingId: null,
+    sidebarOpen: true,
+    expanded: loadExpanded(),
+    dialog: null,
+    context: null,
+    toasts: [],
+    job: null,
+
+    // ------------------------------------------------------------- loading
+    async init() {
+      await get().reloadSettings()
+      await get().refreshAll()
+      set({ ready: true })
+    },
+
+    async reloadSettings() {
+      const settings = await api.settings.get()
+      set({ settings })
+    },
+
+    async reload(options = {}) {
+      const seq = ++requestSeq
+      const { scope, search, settings, items } = get()
+      const limit = options.keepDepth ? Math.min(MAX_DEPTH, Math.max(PAGE_SIZE, items.length)) : PAGE_SIZE
+      set({ loading: true })
+      try {
+        const page = await api.bookmarks.query({ scope, search, sort: settings.sort, direction: settings.direction, limit, offset: 0 })
+        if (seq !== requestSeq) return
+        const present = new Set(page.items.map((b) => b.id))
+        set((s) => ({
+          items: page.items,
+          total: page.total,
+          loading: false,
+          selected: new Set([...s.selected].filter((id) => present.has(id))),
+          editingId: s.editingId !== null && present.has(s.editingId) ? s.editingId : null
+        }))
+      } catch (error) {
+        if (seq !== requestSeq) return
+        set({ loading: false })
+        get().toast(errorMessage(error), 'error')
+      }
+    },
+
+    async loadMore() {
+      const { items, total, loading, scope, search, settings } = get()
+      if (loading || loadingMore || items.length >= total) return
+      loadingMore = true
+      const seq = requestSeq
+      try {
+        const page = await api.bookmarks.query({ scope, search, sort: settings.sort, direction: settings.direction, limit: PAGE_SIZE, offset: items.length })
+        if (seq !== requestSeq) return
+        set((s) => {
+          const known = new Set(s.items.map((b) => b.id))
+          return { items: [...s.items, ...page.items.filter((b) => !known.has(b.id))], total: page.total }
+        })
+      } catch (error) {
+        get().toast(errorMessage(error), 'error')
+      } finally {
+        loadingMore = false
+      }
+    },
+
+    async refreshMeta() {
+      const [collections, counts, tags] = await Promise.all([api.collections.list(), api.data.counts(), api.tags.list()])
+      set({ collections, counts, tags })
+    },
+
+    async refreshAll() {
+      await Promise.all([get().refreshMeta(), get().reload({ keepDepth: true })])
+    },
+
+    // ---------------------------------------------------------- navigation
+    setScope(scope) {
+      if (sameScope(scope, get().scope) && !get().search) return
+      clearTimeout(searchTimer)
+      set({ scope, search: '', selected: new Set(), anchorId: null, editingId: null })
+      void get().reload()
+    },
+
+    setSearch(text) {
+      set({ search: text })
+      clearTimeout(searchTimer)
+      searchTimer = setTimeout(() => void get().reload(), 180)
+    },
+
+    async updateSettings(patch) {
+      const previous = get().settings
+      set({ settings: { ...previous, ...patch } })
+      const saved = await guard(() => api.settings.set(patch))
+      if (!saved) {
+        set({ settings: previous })
+        return
+      }
+      if (patch.sort !== undefined || patch.direction !== undefined) await get().reload()
+    },
+
+    toggleSidebar() {
+      set((s) => ({ sidebarOpen: !s.sidebarOpen }))
+    },
+
+    toggleExpanded(id) {
+      set((s) => {
+        const expanded = { ...s.expanded, [id]: !(s.expanded[id] ?? false) }
+        saveExpanded(expanded)
+        return { expanded }
+      })
+    },
+
+    // ----------------------------------------------------------- selection
+    selectOnly(id) {
+      set({ selected: new Set([id]), anchorId: id })
+    },
+    toggleSelect(id) {
+      set((s) => {
+        const next = new Set(s.selected)
+        if (next.has(id)) next.delete(id)
+        else next.add(id)
+        return { selected: next, anchorId: id }
+      })
+    },
+    selectRange(id) {
+      const { items, anchorId } = get()
+      const from = items.findIndex((b) => b.id === (anchorId ?? id))
+      const to = items.findIndex((b) => b.id === id)
+      if (from < 0 || to < 0) return get().selectOnly(id)
+      const [lo, hi] = from < to ? [from, to] : [to, from]
+      set({ selected: new Set(items.slice(lo, hi + 1).map((b) => b.id)) })
+    },
+    selectAll() {
+      set({ selected: new Set(get().items.map((b) => b.id)) })
+    },
+    clearSelection() {
+      set({ selected: new Set(), anchorId: null })
+    },
+    moveSelection(delta) {
+      const { items, anchorId } = get()
+      if (items.length === 0) return
+      const current = items.findIndex((b) => b.id === anchorId)
+      const next = Math.max(0, Math.min(items.length - 1, current < 0 ? (delta > 0 ? 0 : items.length - 1) : current + delta))
+      const target = items[next]
+      if (target) get().selectOnly(target.id)
+    },
+    setEditing(id) {
+      set({ editingId: id })
+    },
+
+    // ----------------------------------------------------------- bookmarks
+    async saveBookmark(id, patch) {
+      const updated = await guard(() => api.bookmarks.update(id, patch))
+      if (!updated) return null
+      set((s) => ({ items: s.items.map((b) => (b.id === id ? updated : b)) }))
+      void get().refreshMeta()
+      return updated
+    },
+
+    async toggleFavorite(ids) {
+      if (ids.length === 0) return
+      const items = get().items.filter((b) => ids.includes(b.id))
+      const makeFavorite = items.some((b) => !b.favorite)
+      await guard(() => api.bookmarks.bulk(ids, { favorite: makeFavorite }))
+      await get().refreshAll()
+    },
+
+    async moveToCollection(ids, collectionId) {
+      if (ids.length === 0) return
+      await guard(() => api.bookmarks.bulk(ids, { collectionId }))
+      const name = collectionId === null ? 'Unsorted' : (get().collections.find((c) => c.id === collectionId)?.name ?? 'collection')
+      get().toast(`Moved ${plural(ids.length, 'bookmark')} to ${name}`, 'success')
+      await get().refreshAll()
+    },
+
+    async addTags(ids, tags) {
+      if (ids.length === 0 || tags.length === 0) return
+      await guard(() => api.bookmarks.bulk(ids, { addTags: tags }))
+      await get().refreshAll()
+    },
+
+    async trashIds(ids) {
+      if (ids.length === 0) return
+      const ok = await guard(async () => (await api.bookmarks.trash(ids), true))
+      if (!ok) return
+      set((s) => ({ selected: new Set([...s.selected].filter((id) => !ids.includes(id))) }))
+      get().toast(`Moved ${plural(ids.length, 'bookmark')} to Trash`, 'info', {
+        label: 'Undo',
+        onClick: () => void get().restoreIds(ids)
+      })
+      await get().refreshAll()
+    },
+
+    async restoreIds(ids) {
+      if (ids.length === 0) return
+      await guard(() => api.bookmarks.restore(ids))
+      await get().refreshAll()
+    },
+
+    async purgeIds(ids) {
+      if (ids.length === 0) return
+      const yes = await get().confirm({
+        title: 'Delete permanently?',
+        message: `${plural(ids.length, 'bookmark')} will be deleted forever. This cannot be undone.`,
+        confirmLabel: 'Delete permanently',
+        danger: true
+      })
+      if (!yes) return
+      await guard(() => api.bookmarks.purge(ids))
+      await get().refreshAll()
+    },
+
+    async emptyTrash() {
+      const count = get().counts.trash
+      if (count === 0) return
+      const yes = await get().confirm({
+        title: 'Empty Trash?',
+        message: `${plural(count, 'bookmark')} will be deleted forever. This cannot be undone.`,
+        confirmLabel: 'Empty Trash',
+        danger: true
+      })
+      if (!yes) return
+      await guard(() => api.bookmarks.emptyTrash())
+      await get().refreshAll()
+    },
+
+    async openBookmark(bookmark) {
+      await guard(() => api.app.openExternal(bookmark.url))
+    },
+
+    async refreshDetails(id) {
+      const pending = get().toast('Fetching details…', 'info')
+      try {
+        const updated = await api.bookmarks.refreshMetadata(id)
+        get().dismissToast(pending)
+        get().toast('Details refreshed', 'success')
+        await get().refreshAll()
+        return updated
+      } catch (error) {
+        get().dismissToast(pending)
+        get().toast(errorMessage(error), 'error')
+        return null
+      }
+    },
+
+    async copyLink(bookmark) {
+      await guard(() => api.app.copyText(bookmark.url))
+      get().toast('Link copied', 'success')
+    },
+
+    // --------------------------------------------------------- collections
+    async createCollection(parentId) {
+      const name = await get().prompt({
+        title: parentId === null ? 'New collection' : 'New sub-collection',
+        label: 'Name',
+        confirmLabel: 'Create',
+        placeholder: 'e.g. Recipes'
+      })
+      if (!name?.trim()) return
+      const created = await guard(() => api.collections.create({ name, parentId }))
+      if (!created) return
+      if (parentId !== null) {
+        const expanded = { ...get().expanded, [parentId]: true }
+        saveExpanded(expanded)
+        set({ expanded })
+      }
+      await get().refreshMeta()
+    },
+
+    async renameCollection(id) {
+      const current = get().collections.find((c) => c.id === id)
+      if (!current) return
+      const name = await get().prompt({ title: 'Rename collection', label: 'Name', initial: current.name, confirmLabel: 'Rename' })
+      if (!name?.trim() || name === current.name) return
+      await guard(() => api.collections.update(id, { name }))
+      await get().refreshMeta()
+    },
+
+    async colorCollection(id, color) {
+      await guard(() => api.collections.update(id, { color }))
+      await get().refreshMeta()
+    },
+
+    async deleteCollection(id) {
+      const current = get().collections.find((c) => c.id === id)
+      if (!current) return
+      const yes = await get().confirm({
+        title: `Delete "${current.name}"?`,
+        message: 'Its sub-collections are deleted too. The bookmarks inside are moved to the Trash, so you can still restore them.',
+        confirmLabel: 'Delete collection',
+        danger: true
+      })
+      if (!yes) return
+      const result = await guard(() => api.collections.remove(id))
+      if (!result) return
+      if (result.trashed > 0) get().toast(`Moved ${plural(result.trashed, 'bookmark')} to Trash`, 'info')
+      await get().refreshMeta()
+      // If the collection being viewed (or one of its parents) was deleted, fall back to "All bookmarks".
+      const { scope, collections } = get()
+      if (scope.kind === 'collection' && !collections.some((c) => c.id === scope.id)) set({ scope: { kind: 'all' } })
+      await get().reload()
+    },
+
+    async moveCollection(id, parentId, index) {
+      await guard(() => api.collections.move(id, parentId, index))
+      if (parentId !== null) {
+        const expanded = { ...get().expanded, [parentId]: true }
+        saveExpanded(expanded)
+        set({ expanded })
+      }
+      await get().refreshMeta()
+    },
+
+    async renameTag(name) {
+      const next = await get().prompt({ title: 'Rename tag', label: 'Tag name', initial: name, confirmLabel: 'Rename' })
+      if (!next?.trim() || next === name) return
+      await guard(() => api.tags.rename(name, next))
+      const { scope } = get()
+      if (scope.kind === 'tag' && scope.name.toLowerCase() === name.toLowerCase()) set({ scope: { kind: 'tag', name: next.replace(/^#+/, '').trim() } })
+      await get().refreshAll()
+    },
+
+    async deleteTag(name) {
+      const yes = await get().confirm({
+        title: `Delete tag "${name}"?`,
+        message: 'The tag is removed from every bookmark. The bookmarks themselves are not deleted.',
+        confirmLabel: 'Delete tag',
+        danger: true
+      })
+      if (!yes) return
+      await guard(() => api.tags.remove(name))
+      const { scope } = get()
+      if (scope.kind === 'tag' && scope.name.toLowerCase() === name.toLowerCase()) set({ scope: { kind: 'all' } })
+      await get().refreshAll()
+    },
+
+    // --------------------------------------------------------- import/export
+    async importFile() {
+      const result = await guard(() => api.data.importFile())
+      if (!result) return
+      get().toast(
+        `Imported ${plural(result.added, 'bookmark')} from ${result.fileName}` +
+          (result.skipped ? ` (${result.skipped} skipped as duplicates or invalid)` : ''),
+        'success'
+      )
+      await get().refreshAll()
+      if (result.added > 0 && get().counts.all > 0) {
+        const fetchDetails = await get().confirm({
+          title: 'Fetch covers and icons?',
+          message: 'Imported bookmarks do not include preview images. Fetch them now in the background? This contacts each website once.',
+          confirmLabel: 'Fetch details'
+        })
+        if (fetchDetails) await get().startJob('fetch-metadata')
+      }
+    },
+
+    async exportFile(format) {
+      const path = await guard(() => api.data.exportFile(format))
+      if (path) get().toast(`Exported to ${path}`, 'success')
+    },
+
+    async startJob(kind) {
+      const id = await guard(() => api.tools.startJob(kind))
+      if (id === null) get().toast('Another task is already running', 'info')
+    },
+
+    async cancelJob() {
+      const job = get().job
+      if (job && !job.finished) await guard(() => api.tools.cancelJob(job.id))
+    },
+
+    onJobProgress(progress) {
+      set({ job: progress })
+      if (progress.finished) {
+        get().toast(
+          `${progress.kind === 'check-links' ? 'Link check' : 'Fetching details'} ${progress.cancelled ? 'cancelled' : 'finished'}${progress.summary ? `: ${progress.summary}` : ''}`,
+          progress.cancelled ? 'info' : 'success'
+        )
+        void get().refreshAll()
+      }
+    },
+
+    // ------------------------------------------------------------------ ui
+    openAdd(urls) {
+      set({ dialog: { type: 'add', urls } })
+    },
+    openDialog(dialog) {
+      set({ dialog })
+    },
+    closeDialog(result) {
+      const resolve = dialogResolver
+      dialogResolver = null
+      set({ dialog: null })
+      resolve?.(result ?? null)
+    },
+    async confirm(options) {
+      return (await ask<boolean>({ type: 'confirm', ...options })) === true
+    },
+    prompt(options) {
+      return ask<string>({ type: 'prompt', initial: '', ...options })
+    },
+    showContext(x, y, items) {
+      set({ context: { x, y, items } })
+    },
+    hideContext() {
+      if (get().context) set({ context: null })
+    },
+    toast(message, kind = 'info', action) {
+      const id = ++toastSeq
+      set((s) => ({ toasts: [...s.toasts.slice(-3), { id, message, kind, action }] }))
+      setTimeout(() => get().dismissToast(id), action ? 8000 : kind === 'error' ? 7000 : 4500)
+      return id
+    },
+    dismissToast(id) {
+      set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }))
+    }
+  }
+})

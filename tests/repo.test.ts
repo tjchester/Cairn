@@ -1,0 +1,205 @@
+import { describe, expect, it } from 'vitest'
+import { makeRepo, q } from './helpers'
+
+describe('bookmarks', () => {
+  it('creates with defaults, normalizes tags and derives the domain', () => {
+    const repo = makeRepo()
+    const b = repo.createBookmark({ url: 'www.Example.com/a', tags: ['  #Dev ', 'dev', 'Tools', ''] })
+    expect(b.url).toBe('https://www.example.com/a')
+    expect(b.domain).toBe('example.com')
+    expect(b.title).toBe('example.com')
+    expect(b.tags).toEqual(['Dev', 'Tools'])
+    expect(b.collectionId).toBeNull()
+    expect(b.status).toBe('unknown')
+  })
+
+  it('rejects unsafe URLs and unknown collections', () => {
+    const repo = makeRepo()
+    expect(() => repo.createBookmark({ url: 'javascript:alert(1)' })).toThrow()
+    expect(() => repo.createBookmark({ url: 'https://a.com', collectionId: 999 })).toThrow('Collection not found')
+  })
+
+  it('updates fields, resets link status when the URL changes and keeps search text current', () => {
+    const repo = makeRepo()
+    const b = repo.createBookmark({ url: 'https://a.com', title: 'Old' })
+    repo.setLinkStatus(b.id, 'broken', 404)
+    const same = repo.updateBookmark(b.id, { title: 'New title', tags: ['x'], favorite: true })
+    expect(same.status).toBe('broken')
+    expect(same.tags).toEqual(['x'])
+    const moved = repo.updateBookmark(b.id, { url: 'https://b.com/page' })
+    expect(moved.status).toBe('unknown')
+    expect(moved.domain).toBe('b.com')
+    expect(repo.query(q({ search: 'b.com/page' })).total).toBe(1)
+    expect(repo.query(q({ search: 'old' })).total).toBe(0)
+  })
+
+  it('finds existing bookmarks by normalized URL', () => {
+    const repo = makeRepo()
+    const b = repo.createBookmark({ url: 'https://example.com/a' })
+    expect(repo.findByUrl('http://www.example.com/a/?utm_source=x')?.id).toBe(b.id)
+    expect(repo.findByUrl('https://example.com/other')).toBeNull()
+    expect(repo.findByUrl('nonsense ://')).toBeNull()
+  })
+
+  it('bulk-updates collection, favorite and tags', () => {
+    const repo = makeRepo()
+    const col = repo.createCollection({ name: 'Reading' })
+    const a = repo.createBookmark({ url: 'https://a.com', tags: ['one', 'two'] })
+    const b = repo.createBookmark({ url: 'https://b.com' })
+    repo.bulkUpdate([a.id, b.id], { collectionId: col.id, favorite: true, addTags: ['three'], removeTags: ['ONE'] })
+    expect(repo.getBookmark(a.id)).toMatchObject({ collectionId: col.id, favorite: true, tags: ['three', 'two'] })
+    expect(repo.getBookmark(b.id)).toMatchObject({ collectionId: col.id, favorite: true, tags: ['three'] })
+  })
+
+  it('sorts, pages and reports totals', () => {
+    const repo = makeRepo()
+    for (const t of ['banana', 'Apple', 'cherry']) repo.createBookmark({ url: `https://${t}.com`, title: t })
+    const asc = repo.query(q({ sort: 'title', direction: 'asc' }))
+    expect(asc.items.map((b) => b.title)).toEqual(['Apple', 'banana', 'cherry'])
+    const page = repo.query(q({ sort: 'title', direction: 'asc', limit: 2, offset: 2 }))
+    expect(page.total).toBe(3)
+    expect(page.items.map((b) => b.title)).toEqual(['cherry'])
+  })
+})
+
+describe('trash', () => {
+  it('moves to trash, restores and purges only trashed items', () => {
+    const repo = makeRepo()
+    const a = repo.createBookmark({ url: 'https://a.com', tags: ['t'] })
+    const b = repo.createBookmark({ url: 'https://b.com' })
+    repo.purge([a.id]) // not trashed: must be a no-op
+    expect(repo.getBookmark(a.id)).not.toBeNull()
+
+    repo.trash([a.id])
+    expect(repo.query(q()).total).toBe(1)
+    expect(repo.query(q({ scope: { kind: 'trash' } })).items.map((x) => x.id)).toEqual([a.id])
+    expect(repo.counts()).toMatchObject({ all: 1, trash: 1 })
+    expect(repo.listTags()).toEqual([]) // tags of trashed bookmarks are not counted
+
+    repo.restore([a.id])
+    expect(repo.query(q()).total).toBe(2)
+
+    repo.trash([a.id, b.id])
+    expect(repo.emptyTrash()).toBe(2)
+    expect(repo.counts()).toMatchObject({ all: 0, trash: 0 })
+    expect(repo.listTags()).toEqual([])
+  })
+})
+
+describe('collections', () => {
+  it('nests, counts descendants in scope queries and reorders', () => {
+    const repo = makeRepo()
+    const dev = repo.createCollection({ name: 'Dev' })
+    const rust = repo.createCollection({ name: 'Rust', parentId: dev.id })
+    const misc = repo.createCollection({ name: 'Misc' })
+    repo.createBookmark({ url: 'https://a.com', collectionId: dev.id })
+    repo.createBookmark({ url: 'https://b.com', collectionId: rust.id })
+    repo.createBookmark({ url: 'https://c.com', collectionId: misc.id })
+    repo.createBookmark({ url: 'https://d.com' })
+
+    expect(repo.query(q({ scope: { kind: 'collection', id: dev.id } })).total).toBe(2)
+    expect(repo.query(q({ scope: { kind: 'collection', id: rust.id } })).total).toBe(1)
+    expect(repo.query(q({ scope: { kind: 'unsorted' } })).total).toBe(1)
+    expect(repo.counts().byCollection).toEqual({ [dev.id]: 1, [rust.id]: 1, [misc.id]: 1 })
+
+    repo.moveCollection(misc.id, null, 0)
+    expect(repo.listCollections().filter((c) => c.parentId === null).map((c) => c.name)).toEqual(['Misc', 'Dev'])
+    repo.moveCollection(rust.id, misc.id, 0)
+    expect(repo.getCollection(rust.id)?.parentId).toBe(misc.id)
+  })
+
+  it('refuses to move a collection into itself or a descendant', () => {
+    const repo = makeRepo()
+    const a = repo.createCollection({ name: 'A' })
+    const b = repo.createCollection({ name: 'B', parentId: a.id })
+    expect(() => repo.moveCollection(a.id, a.id, 0)).toThrow()
+    expect(() => repo.moveCollection(a.id, b.id, 0)).toThrow()
+  })
+
+  it('deleting a collection trashes its bookmarks (including nested) instead of destroying them', () => {
+    const repo = makeRepo()
+    const a = repo.createCollection({ name: 'A' })
+    const b = repo.createCollection({ name: 'B', parentId: a.id })
+    const inA = repo.createBookmark({ url: 'https://a.com', collectionId: a.id })
+    const inB = repo.createBookmark({ url: 'https://b.com', collectionId: b.id })
+    const keep = repo.createBookmark({ url: 'https://keep.com' })
+
+    expect(repo.deleteCollection(a.id)).toEqual({ trashed: 2 })
+    expect(repo.listCollections()).toEqual([])
+    expect(repo.getBookmark(inA.id)?.deletedAt).not.toBeNull()
+    expect(repo.getBookmark(inB.id)?.deletedAt).not.toBeNull()
+    expect(repo.getBookmark(keep.id)?.deletedAt).toBeNull()
+
+    repo.restore([inA.id])
+    expect(repo.getBookmark(inA.id)).toMatchObject({ deletedAt: null, collectionId: null })
+  })
+
+  it('finds or creates by path case-insensitively', () => {
+    const repo = makeRepo()
+    const id = repo.ensureCollectionPath(['Dev', 'Rust'])
+    expect(repo.ensureCollectionPath(['dev', 'rust'])).toBe(id)
+    expect(repo.listCollections()).toHaveLength(2)
+    expect(repo.ensureCollectionPath([])).toBeNull()
+  })
+})
+
+describe('tags', () => {
+  it('lists counts, renames, merges and removes', () => {
+    const repo = makeRepo()
+    const a = repo.createBookmark({ url: 'https://a.com', tags: ['js', 'web'] })
+    const b = repo.createBookmark({ url: 'https://b.com', tags: ['javascript'] })
+    expect(repo.listTags()).toEqual([
+      { name: 'javascript', count: 1 },
+      { name: 'js', count: 1 },
+      { name: 'web', count: 1 }
+    ])
+
+    repo.renameTag('js', 'javascript') // merge
+    expect(repo.getBookmark(a.id)?.tags).toEqual(['javascript', 'web'])
+    expect(repo.query(q({ search: '#js' })).total).toBe(0)
+    expect(repo.query(q({ search: '#javascript' })).total).toBe(2)
+
+    repo.renameTag('web', 'Web') // casing only
+    expect(repo.getBookmark(a.id)?.tags).toContain('Web')
+
+    repo.removeTag('javascript')
+    expect(repo.getBookmark(b.id)?.tags).toEqual([])
+    expect(repo.getBookmark(a.id)?.tags).toEqual(['Web'])
+  })
+})
+
+describe('duplicates and metadata', () => {
+  it('groups duplicate URLs and ignores trashed ones', () => {
+    const repo = makeRepo()
+    const a = repo.createBookmark({ url: 'https://example.com/p' })
+    const b = repo.createBookmark({ url: 'http://www.example.com/p/?utm_medium=x' })
+    repo.createBookmark({ url: 'https://example.com/other' })
+    const groups = repo.findDuplicateGroups()
+    expect(groups).toHaveLength(1)
+    expect(groups[0]?.map((x) => x.id)).toEqual([a.id, b.id])
+    repo.trash([b.id])
+    expect(repo.findDuplicateGroups()).toHaveLength(0)
+  })
+
+  it('applies metadata without clobbering user-edited fields', () => {
+    const repo = makeRepo()
+    const auto = repo.createBookmark({ url: 'https://a.com' })
+    const edited = repo.createBookmark({ url: 'https://b.com', title: 'My title', excerpt: 'mine' })
+    const meta = { title: 'Scraped', excerpt: 'scraped', coverUrl: 'https://a.com/c.png', faviconUrl: 'https://a.com/f.ico' }
+    expect(repo.applyMetadata(auto.id, meta)).toMatchObject({ title: 'Scraped', excerpt: 'scraped', coverUrl: meta.coverUrl })
+    expect(repo.applyMetadata(edited.id, meta)).toMatchObject({ title: 'My title', excerpt: 'mine', coverUrl: meta.coverUrl })
+  })
+})
+
+describe('database', () => {
+  it('rolls back a failed transaction', () => {
+    const repo = makeRepo()
+    expect(() =>
+      repo.tx(() => {
+        repo.createBookmark({ url: 'https://a.com' })
+        throw new Error('boom')
+      })
+    ).toThrow('boom')
+    expect(repo.counts().all).toBe(0)
+  })
+})
