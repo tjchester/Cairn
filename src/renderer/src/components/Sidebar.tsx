@@ -201,6 +201,9 @@ export function Sidebar(): React.JSX.Element {
           onDropBookmarks={(ids) => void s.moveToCollection(ids, null)}
         />
         <NavItem icon="favorite" label="Favorites" count={s.counts.favorites} active={is({ kind: 'favorites' })} onClick={() => s.setScope({ kind: 'favorites' })} />
+        {s.pendingProposals > 0 && (
+          <NavItem icon="sparkles" label="Review suggested tags" count={s.pendingProposals} active={false} onClick={() => s.openDialog({ type: 'review-tags' })} />
+        )}
         {(s.counts.broken > 0 || is({ kind: 'broken' })) && (
           <NavItem icon="unlink" label="Broken links" count={s.counts.broken} active={is({ kind: 'broken' })} onClick={() => s.setScope({ kind: 'broken' })} />
         )}

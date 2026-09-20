@@ -913,20 +913,41 @@ export class Repo {
     return rows.map((r) => ({ id: Number(r.id), bookmarkId: Number(r.bookmark_id), origin: (r.origin === 'llm' ? 'llm' : 'builtin') as SuggestionOrigin }))
   }
 
-  /** Applies the pending proposals for a tag (all of them, or just the given bookmarks) as one undoable run. */
-  applyProposals(tag: string, bookmarkIds?: number[]): { applied: number; runId: number | null } {
+  /**
+   * Applies the pending proposals for a tag (all of them, or just the given bookmarks) as one undoable run.
+   * Pass `sharedRunId` to fold the result into a run that is already open (used by "apply everything").
+   */
+  applyProposals(tag: string, bookmarkIds?: number[], sharedRunId?: number): { applied: number; runId: number | null } {
     return this.tx(() => {
       const rows = this.pendingRows(tag, bookmarkIds)
       if (rows.length === 0) return { applied: 0, runId: null }
-      const runId = this.createRun('review', 'suggest')
+      const runId = sharedRunId ?? this.createRun('review', 'suggest')
       let applied = 0
       for (const row of rows) {
         applied += this.addAutoTags(row.bookmarkId, [tag], row.origin, runId).length
         this.run('DELETE FROM tag_proposals WHERE id = ?', row.id)
       }
+      if (sharedRunId === undefined) this.finishRun(runId, applied, applied)
+      return { applied, runId }
+    })
+  }
+
+  /** Applies every pending proposal as a single undoable run. */
+  applyAllProposals(): { applied: number; runId: number | null } {
+    return this.tx(() => {
+      const groups = this.proposalGroups()
+      if (groups.length === 0) return { applied: 0, runId: null }
+      const runId = this.createRun('review-all', 'suggest')
+      let applied = 0
+      for (const group of groups) applied += this.applyProposals(group.tag, undefined, runId).applied
       this.finishRun(runId, applied, applied)
       return { applied, runId }
     })
+  }
+
+  /** Tags already rejected for this bookmark (lower-cased), so they are not suggested again. */
+  rejectedProposalTags(bookmarkId: number): Set<string> {
+    return new Set(this.all("SELECT tag FROM tag_proposals WHERE bookmark_id = ? AND status = 'rejected'", bookmarkId).map((r) => String(r.tag).toLowerCase()))
   }
 
   /** Marks proposals as rejected; they are remembered so a later run does not suggest them again. */

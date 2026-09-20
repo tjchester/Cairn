@@ -47,11 +47,12 @@ if (!app.requestSingleInstanceLock()) {
     }
     // Records rate limits and connectivity decisions during bulk jobs (Help > Show Connection Log).
     const logFile = join(app.getPath('userData'), 'connection.log')
+    const tagging = new TaggingService(repo, () => readSettings(repo).tagging)
     const jobs = new JobRunner(repo, (progress: JobProgress) => sendToWindow('job:progress', progress), {
-      log: createFileLogger(logFile)
+      log: createFileLogger(logFile),
+      tagging
     })
 
-    const tagging = new TaggingService(repo, () => readSettings(repo).tagging)
     registerIpc({ repo, jobs, tagging, isTrustedUrl, getWindow: () => mainWindow })
 
     buildMenu({

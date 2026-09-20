@@ -76,6 +76,12 @@ const bulkPatch = z.object({
   removeTags: tags.optional()
 })
 
+const startJobOptions = z.object({
+  scope: z.enum(['untagged', 'all', 'ids']).optional(),
+  ids: ids.optional(),
+  useLlm: z.boolean().optional()
+})
+
 const taggingTarget = z.union([
   z.object({ bookmarkId: id }),
   z.object({
@@ -176,7 +182,7 @@ export function registerIpc(ctx: IpcContext): void {
   // metadata + tools
   handle('metadata:fetch', z.tuple([text(4096)]), ([url]) => fetchMetadata(url))
   handle('tools:findDuplicates', noArgs, () => repo.findDuplicateGroups())
-  handle('tools:startJob', z.tuple([z.enum(['check-links', 'fetch-metadata'])]), ([kind]) => jobs.start(kind))
+  handle('tools:startJob', z.tuple([z.enum(['check-links', 'fetch-metadata', 'auto-tag']), startJobOptions.optional()]), ([kind, options]) => jobs.start(kind, options ?? {}))
   handle('tools:cancelJob', z.tuple([text(100)]), ([jobId]) => jobs.cancel(jobId))
 
   // data
@@ -224,6 +230,17 @@ export function registerIpc(ctx: IpcContext): void {
 
   // tagging
   handle('tagging:suggest', z.tuple([taggingTarget, z.boolean()]), ([target, withLlm]) => tagging.suggestResult(target, withLlm))
+  handle('tagging:review:count', noArgs, () => repo.pendingProposalCount())
+  handle('tagging:review:groups', noArgs, () => repo.proposalGroups())
+  handle('tagging:review:items', z.tuple([text(200)]), ([tag]) => repo.proposalItems(tag))
+  handle('tagging:review:apply', z.tuple([text(200), ids.optional()]), ([tag, bookmarkIds]) => repo.applyProposals(tag, bookmarkIds).applied)
+  handle('tagging:review:reject', z.tuple([text(200), ids.optional()]), ([tag, bookmarkIds]) => repo.rejectProposals(tag, bookmarkIds))
+  handle('tagging:review:never', z.tuple([text(200)]), ([tag]) => repo.neverSuggest(tag))
+  handle('tagging:review:applyAll', noArgs, () => repo.applyAllProposals().applied)
+  handle('tagging:review:discardAll', noArgs, () => repo.discardPendingProposals())
+  handle('tagging:runs:last', noArgs, () => repo.lastRun())
+  handle('tagging:runs:undo', z.tuple([id]), ([runId]) => repo.undoRun(runId))
+  handle('tagging:runs:removeAuto', noArgs, () => repo.removeAutoTags())
 
   // app
   handle('app:version', noArgs, () => app.getVersion())

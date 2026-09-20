@@ -5,6 +5,7 @@ import { AddDialog } from './components/AddDialog'
 import { BookmarkList } from './components/BookmarkList'
 import { SettingsDialog, ShortcutsDialog, ToolsDialog } from './components/Dialogs'
 import { Editor } from './components/Editor'
+import { ReviewDialog } from './components/ReviewDialog'
 import { Sidebar } from './components/Sidebar'
 import { BulkBar, Toolbar } from './components/Toolbar'
 import { ConfirmDialog, ContextMenu, PromptDialog, Toasts } from './components/ui'
@@ -25,6 +26,8 @@ function DialogHost(): React.JSX.Element | null {
       return <ToolsDialog />
     case 'shortcuts':
       return <ShortcutsDialog />
+    case 'review-tags':
+      return <ReviewDialog />
     case 'confirm':
       return <ConfirmDialog {...dialog} />
     case 'prompt':

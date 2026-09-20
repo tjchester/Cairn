@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import type { JobKind, JobProgress, LinkStatus } from '@shared/types'
+import type { JobKind, JobProgress, LinkStatus, StartJobOptions } from '@shared/types'
 import { domainOf } from '@shared/url'
 import type { Repo } from '../db/repo'
+import type { EngineContext } from '../tagging/engine'
+import type { TaggingService } from '../tagging/service'
 import {
   EMPTY_SIGNALS,
   attemptLink,
@@ -81,6 +83,8 @@ export interface JobDeps {
   random: () => number
   /** Records notable events (rate limits, connectivity decisions) for later diagnosis. */
   log: (event: string, data?: Record<string, unknown>) => void
+  /** Tag suggestions: powers the auto-tag job and tagging after details are fetched (null = unavailable). */
+  tagging: TaggingService | null
 }
 
 export interface JobTuning {
@@ -110,7 +114,8 @@ const defaultDeps: JobDeps = {
   probe: (recentlyWorking, signal) => probeConnectivity(recentlyWorking, { signal }),
   clock: realClock,
   random: Math.random,
-  log: () => undefined
+  log: () => undefined,
+  tagging: null
 }
 
 export const DEFAULT_JOB_OPTIONS: JobOptions = {
@@ -272,11 +277,12 @@ export class JobRunner {
   }
 
   /** Starts a job and returns its id, or null if one is already running. Completion is reported via `emit`. */
-  start(kind: JobKind): string | null {
+  start(kind: JobKind, options: StartJobOptions = {}): string | null {
     if (this.active) return null
     const job: ActiveJob = { id: randomUUID(), kind, controller: new AbortController() }
     this.active = job
-    void this.execute(job).finally(() => {
+    const run = kind === 'auto-tag' ? this.executeAutoTag(job, options) : this.execute(job)
+    void run.finally(() => {
       if (this.active === job) this.active = null
     })
     return job.id
@@ -284,6 +290,67 @@ export class JobRunner {
 
   cancel(id: string): void {
     if (this.active?.id === id) this.active.controller.abort()
+  }
+
+  /** Suggests (or, in Auto mode, adds) tags for many bookmarks using the built-in engine. Local and fast. */
+  private async executeAutoTag(job: ActiveJob, options: StartJobOptions): Promise<void> {
+    const { clock, log } = this.deps
+    const tagging = this.deps.tagging
+    const signal = job.controller.signal
+    const progress: JobProgress = { id: job.id, kind: job.kind, done: 0, total: 0, finished: false, cancelled: false, paused: false }
+    let lastEmit = 0
+    const tick = (force = false): void => {
+      const now = clock.now()
+      if (!force && now - lastEmit < 250) return
+      lastEmit = now
+      this.emit({ ...progress })
+    }
+    const finish = (summary: string): void => {
+      progress.finished = true
+      progress.cancelled = signal.aborted
+      progress.summary = summary
+      tick(true)
+    }
+
+    const mode = tagging?.mode() ?? 'off'
+    if (!tagging || mode === 'off') return finish('Auto-tagging is turned off. Turn it on in Settings first.')
+
+    const candidates = this.repo.listForTagging(options.scope ?? 'untagged', options.ids ?? [])
+    progress.total = candidates.length
+    log('job-start', { job: 'auto-tag', mode, scope: options.scope ?? 'untagged', total: candidates.length })
+    tick(true)
+
+    const context = tagging.context()
+    const runId = this.repo.createRun('auto-tag', mode)
+    let touched = 0
+    let tags = 0
+    try {
+      for (const candidate of candidates) {
+        if (signal.aborted) break
+        const suggestions = tagging.suggestForCandidate(candidate, context)
+        if (suggestions.length > 0) {
+          const result = tagging.deliver(candidate.id, suggestions, mode, runId)
+          if (result.added + result.proposed > 0) {
+            touched++
+            tags += result.added + result.proposed
+          }
+        }
+        progress.done++
+        tick()
+        if (progress.done % 25 === 0) await clock.sleep(1) // let the app breathe during a big run
+      }
+    } finally {
+      this.repo.finishRun(runId, mode === 'auto' ? tags : 0, touched)
+      const plural = (n: number, word: string): string => n + ' ' + word + (n === 1 ? '' : 's')
+      log('job-end', { job: 'auto-tag', mode, touched, tags, cancelled: signal.aborted })
+      finish(
+        tags === 0
+          ? 'No new tags to suggest for ' + plural(progress.done, 'bookmark') + '.'
+          : mode === 'auto'
+            ? plural(tags, 'tag') + ' added to ' + plural(touched, 'bookmark') + '. You can undo this run in Tools.'
+            : plural(tags, 'tag') + ' suggested for ' + plural(touched, 'bookmark') + '. Review them in Tools.'
+      )
+    }
   }
 
   private async execute(job: ActiveJob): Promise<void> {
@@ -306,6 +373,28 @@ export class JobRunner {
     let updated = 0
     let failed = 0
     let errored = 0
+
+    // After details are fetched, untagged bookmarks also get tag suggestions (queued for review, or added in Auto mode).
+    const tagging = job.kind === 'fetch-metadata' ? this.deps.tagging : null
+    const taggingMode = tagging?.mode() ?? 'off'
+    let tagContext: EngineContext | null = null
+    let tagRun: number | null = null
+    let tagged = 0
+    let taggedBookmarks = 0
+    const tagAfterFetch = (bookmarkId: number): void => {
+      if (!tagging || taggingMode === 'off') return
+      const candidate = this.repo.getTaggingCandidate(bookmarkId)
+      if (!candidate || candidate.tags.length > 0) return
+      tagContext ??= tagging.context()
+      const suggestions = tagging.suggestForCandidate(candidate, tagContext)
+      if (suggestions.length === 0) return
+      tagRun ??= this.repo.createRun('fetch', taggingMode)
+      const result = tagging.deliver(bookmarkId, suggestions, taggingMode, tagRun)
+      if (result.added + result.proposed > 0) {
+        tagged += result.added + result.proposed
+        taggedBookmarks++
+      }
+    }
     let lastEmit = 0
     const recentlyWorking: string[] = []
 
@@ -410,6 +499,7 @@ export class JobRunner {
               if (outcome.kind === 'done' && outcome.value.status !== null && outcome.value.status < 400) {
                 this.repo.applyMetadata(task.id, { ...outcome.value, signals: outcome.value.signals ?? EMPTY_SIGNALS })
                 updated++
+                tagAfterFetch(task.id)
               } else if (outcome.kind === 'done') {
                 // The page answered with an error: there is nothing to learn, so do not ask again next time.
                 this.repo.setSignals(task.id, EMPTY_SIGNALS)
@@ -438,7 +528,9 @@ export class JobRunner {
         ? `${counts.broken} broken, ${counts.ok} working, ${counts.unknown} inconclusive`
         : `${updated} bookmarks refreshed` +
           (errored > 0 ? `, ${errored} returned an error page` : '') +
-          (failed > 0 ? `, ${failed} could not be reached (run it again later)` : '')
+          (failed > 0 ? `, ${failed} could not be reached (run it again later)` : '') +
+          (tagged > 0 ? `, ${tagged} tag${tagged === 1 ? '' : 's'} ${taggingMode === 'auto' ? 'added' : 'suggested'}` : '')
+      if (tagRun !== null) this.repo.finishRun(tagRun, taggingMode === 'auto' ? tagged : 0, taggedBookmarks)
       log('job-end', { job: job.kind, done: progress.done, total: progress.total, cancelled: progress.cancelled, summary: progress.summary })
       tick(true)
     }

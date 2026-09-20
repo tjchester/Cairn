@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { JobRunner, type JobDeps, type JobOptions } from '../src/main/services/jobs'
 import type { LinkAttempt, MetadataResult } from '../src/main/services/metadata'
-import type { JobProgress } from '../src/shared/types'
+import { DEFAULT_TAGGING, type JobProgress, type TaggingMode } from '../src/shared/types'
+import { TaggingService } from '../src/main/tagging/service'
 import { makeRepo } from './helpers'
 
 // Everything runs on fake timers: minutes of waiting, backoff and outage recovery take milliseconds.
@@ -359,5 +360,152 @@ describe('fetch-details job', () => {
     expect(last.summary).toBe('5 bookmarks refreshed')
     expect(events.some((e) => e.paused)).toBe(true)
     expect(repo.allActiveBookmarks().every((b) => b.coverUrl !== null)).toBe(true)
+  })
+})
+
+describe('auto-tag job', () => {
+  function setupTagging(mode: TaggingMode) {
+    const repo = makeRepo()
+    const events: JobProgress[] = []
+    const tagging = new TaggingService(repo, () => ({ ...DEFAULT_TAGGING, mode }))
+    const runner = new JobRunner(repo, (e) => events.push(e), { random: () => 0.5, probe: async () => true, tagging }, OPTIONS)
+    return { repo, events, runner }
+  }
+  const seed = (repo: ReturnType<typeof makeRepo>) => ({
+    code: repo.createBookmark({ url: 'https://github.com/a/b', title: 'A JavaScript library' }),
+    bare: repo.createBookmark({ url: 'https://example.com/', title: 'Untitled' }),
+    tagged: repo.createBookmark({ url: 'https://github.com/c/d', title: 'Another JavaScript library', tags: ['mine'] })
+  })
+
+  it('in Suggest mode queues suggestions for review and changes no tags', async () => {
+    const { repo, events, runner } = setupTagging('suggest')
+    const { code, bare, tagged } = seed(repo)
+    runner.start('auto-tag')
+    const last = await finish(events)
+
+    expect(last.summary).toBe('2 tags suggested for 1 bookmark. Review them in Tools.')
+    expect(last).toMatchObject({ done: 2, total: 2 }) // only the untagged ones are considered by default
+    expect(repo.getBookmark(code.id)?.tags).toEqual([])
+    expect(repo.proposalGroups().map((g) => g.tag).sort()).toEqual(['code', 'javascript'])
+    expect(repo.proposalItems('code').map((i) => i.bookmarkId)).toEqual([code.id])
+    expect(repo.getBookmark(bare.id)?.tags).toEqual([])
+    expect(repo.getBookmark(tagged.id)?.tags).toEqual(['mine'])
+    expect(repo.lastRun()).toBeNull() // nothing was applied, so there is nothing to undo
+  })
+
+  it('in Auto mode adds the tags as automatic ones, in one run that can be undone', async () => {
+    const { repo, events, runner } = setupTagging('auto')
+    const { code, tagged } = seed(repo)
+    runner.start('auto-tag')
+    const last = await finish(events)
+
+    expect(last.summary).toBe('2 tags added to 1 bookmark. You can undo this run in Tools.')
+    expect(repo.getBookmark(code.id)).toMatchObject({ tags: ['code', 'javascript'], autoTags: ['code', 'javascript'] })
+    expect(repo.getBookmark(tagged.id)?.tags).toEqual(['mine'])
+
+    const run = repo.lastRun()
+    expect(run).toMatchObject({ kind: 'auto-tag', mode: 'auto', tagsApplied: 2, bookmarksTouched: 1 })
+    expect(repo.undoRun(run?.id as number)).toBe(2)
+    expect(repo.getBookmark(code.id)?.tags).toEqual([])
+  })
+
+  it('can cover every bookmark or a chosen set, and never re-proposes what you rejected', async () => {
+    const { repo, events, runner } = setupTagging('suggest')
+    const { code, tagged } = seed(repo)
+
+    runner.start('auto-tag', { scope: 'all' })
+    await finish(events)
+    expect(repo.proposalItems('javascript').map((i) => i.bookmarkId).sort()).toEqual([code.id, tagged.id].sort())
+
+    repo.rejectProposals('javascript', [code.id])
+    events.length = 0
+    runner.start('auto-tag', { scope: 'ids', ids: [code.id] })
+    const again = await finish(events)
+    expect(again.total).toBe(1)
+    expect(repo.proposalItems('javascript').map((i) => i.bookmarkId)).toEqual([tagged.id]) // code's rejected suggestion stays rejected
+  })
+
+  it('does nothing, and says why, when auto-tagging is turned off', async () => {
+    const { repo, events, runner } = setupTagging('off')
+    seed(repo)
+    runner.start('auto-tag')
+    const last = await finish(events)
+    expect(last.summary).toMatch(/turned off/)
+    expect(repo.pendingProposalCount()).toBe(0)
+  })
+
+  it('can be cancelled part-way and keeps what it finished', async () => {
+    const { repo, events, runner } = setupTagging('auto')
+    for (let i = 0; i < 60; i++) repo.createBookmark({ url: 'https://github.com/org/repo' + i, title: 'A JavaScript library' })
+    const id = runner.start('auto-tag') as string
+    runner.cancel(id)
+    const last = await finish(events)
+    expect(last.cancelled).toBe(true)
+    expect(last.done).toBeGreaterThan(0)
+    expect(last.done).toBeLessThan(60)
+    expect(repo.lastRun()?.bookmarksTouched).toBe(last.done) // what was finished is recorded, and can be undone
+  })
+})
+
+describe('tagging after details are fetched', () => {
+  const page = (title: string): MetadataResult => ({
+    title,
+    excerpt: '',
+    coverUrl: null,
+    faviconUrl: null,
+    finalUrl: 'https://x.example/',
+    status: 200,
+    retryAfterMs: null
+  })
+
+  function setupFetch(mode: TaggingMode) {
+    const repo = makeRepo()
+    const events: JobProgress[] = []
+    const tagging = new TaggingService(repo, () => ({ ...DEFAULT_TAGGING, mode }))
+    const runner = new JobRunner(
+      repo,
+      (e) => events.push(e),
+      {
+        random: () => 0.5,
+        probe: async () => true,
+        tagging,
+        fetchMetadata: async (url) => (url.includes('gone') ? { ...page(''), status: 404 } : page('A JavaScript library'))
+      },
+      OPTIONS
+    )
+    return { repo, events, runner }
+  }
+
+  it('queues suggestions for freshly fetched, untagged bookmarks only', async () => {
+    const { repo, events, runner } = setupFetch('suggest')
+    const fresh = repo.createBookmark({ url: 'https://github.com/a/b' })
+    const already = repo.createBookmark({ url: 'https://github.com/c/d', tags: ['mine'] })
+    const gone = repo.createBookmark({ url: 'https://github.com/gone/page' })
+    runner.start('fetch-metadata')
+    const last = await finish(events)
+
+    expect(last.summary).toBe('2 bookmarks refreshed, 1 returned an error page, 2 tags suggested')
+    expect(repo.proposalItems('code').map((i) => i.bookmarkId)).toEqual([fresh.id])
+    expect(repo.getBookmark(already.id)?.tags).toEqual(['mine'])
+    expect(repo.proposalItems('javascript').map((i) => i.bookmarkId)).not.toContain(gone.id)
+  })
+
+  it('adds them directly in Auto mode', async () => {
+    const { repo, events, runner } = setupFetch('auto')
+    const fresh = repo.createBookmark({ url: 'https://github.com/a/b' })
+    runner.start('fetch-metadata')
+    const last = await finish(events)
+    expect(last.summary).toBe('1 bookmarks refreshed, 2 tags added')
+    expect(repo.getBookmark(fresh.id)?.autoTags).toEqual(['code', 'javascript'])
+    expect(repo.lastRun()).toMatchObject({ kind: 'fetch', tagsApplied: 2 })
+  })
+
+  it('leaves tags alone when auto-tagging is off', async () => {
+    const { repo, events, runner } = setupFetch('off')
+    repo.createBookmark({ url: 'https://github.com/a/b' })
+    runner.start('fetch-metadata')
+    const last = await finish(events)
+    expect(last.summary).toBe('1 bookmarks refreshed')
+    expect(repo.pendingProposalCount()).toBe(0)
   })
 })

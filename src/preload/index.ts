@@ -43,7 +43,7 @@ const api: CairnApi = {
   },
   tools: {
     findDuplicates: () => invoke('tools:findDuplicates'),
-    startJob: (kind) => invoke('tools:startJob', kind),
+    startJob: (kind, options) => invoke('tools:startJob', kind, options),
     cancelJob: (id) => invoke('tools:cancelJob', id)
   },
   data: {
@@ -56,7 +56,22 @@ const api: CairnApi = {
     set: (patch) => invoke('settings:set', patch)
   },
   tagging: {
-    suggest: (target, withLlm) => invoke('tagging:suggest', target, withLlm)
+    suggest: (target, withLlm) => invoke('tagging:suggest', target, withLlm),
+    review: {
+      count: () => invoke('tagging:review:count'),
+      groups: () => invoke('tagging:review:groups'),
+      items: (tag) => invoke('tagging:review:items', tag),
+      apply: (tag, bookmarkIds) => invoke('tagging:review:apply', tag, bookmarkIds),
+      reject: (tag, bookmarkIds) => invoke('tagging:review:reject', tag, bookmarkIds),
+      never: (tag) => invoke('tagging:review:never', tag),
+      applyAll: () => invoke('tagging:review:applyAll'),
+      discardAll: () => invoke('tagging:review:discardAll')
+    },
+    runs: {
+      last: () => invoke('tagging:runs:last'),
+      undo: (runId) => invoke('tagging:runs:undo', runId),
+      removeAuto: () => invoke('tagging:runs:removeAuto')
+    }
   },
   app: {
     version: () => invoke('app:version'),

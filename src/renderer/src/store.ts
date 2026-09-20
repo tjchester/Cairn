@@ -11,6 +11,7 @@ import {
   type Scope,
   type Settings,
   type SettingsPatch,
+  type StartJobOptions,
   type TagInfo
 } from '@shared/types'
 import type { IconName } from './icons'
@@ -43,6 +44,7 @@ export type DialogState =
   | { type: 'settings' }
   | { type: 'tools' }
   | { type: 'shortcuts' }
+  | { type: 'review-tags' }
   | { type: 'confirm'; title: string; message: string; confirmLabel: string; danger?: boolean }
   | { type: 'prompt'; title: string; label: string; initial: string; confirmLabel: string; placeholder?: string }
 
@@ -51,6 +53,8 @@ interface Store {
   settings: Settings
   collections: Collection[]
   counts: Counts
+  /** Suggested tags waiting for review. */
+  pendingProposals: number
   tags: TagInfo[]
   scope: Scope
   search: string
@@ -111,12 +115,12 @@ interface Store {
 
   importFile(): Promise<void>
   exportFile(format: ExportFormat): Promise<void>
-  startJob(kind: JobKind): Promise<void>
+  startJob(kind: JobKind, options?: StartJobOptions): Promise<void>
   cancelJob(): Promise<void>
   onJobProgress(progress: JobProgress): void
 
   openAdd(urls?: string[]): void
-  openDialog(dialog: Extract<DialogState, { type: 'settings' | 'tools' | 'shortcuts' }>): void
+  openDialog(dialog: Extract<DialogState, { type: 'settings' | 'tools' | 'shortcuts' | 'review-tags' }>): void
   closeDialog(result?: unknown): void
   confirm(options: { title: string; message: string; confirmLabel: string; danger?: boolean }): Promise<boolean>
   prompt(options: { title: string; label: string; initial?: string; confirmLabel: string; placeholder?: string }): Promise<string | null>
@@ -175,6 +179,7 @@ export const useStore = create<Store>((set, get) => {
     settings: DEFAULT_SETTINGS,
     collections: [],
     counts: emptyCounts,
+    pendingProposals: 0,
     tags: [],
     scope: { kind: 'all' },
     search: '',
@@ -246,8 +251,13 @@ export const useStore = create<Store>((set, get) => {
     },
 
     async refreshMeta() {
-      const [collections, counts, tags] = await Promise.all([api.collections.list(), api.data.counts(), api.tags.list()])
-      set({ collections, counts, tags })
+      const [collections, counts, tags, pendingProposals] = await Promise.all([
+        api.collections.list(),
+        api.data.counts(),
+        api.tags.list(),
+        api.tagging.review.count()
+      ])
+      set({ collections, counts, tags, pendingProposals })
     },
 
     async refreshAll() {
@@ -543,8 +553,8 @@ export const useStore = create<Store>((set, get) => {
       if (path) get().toast(`Exported to ${path}`, 'success')
     },
 
-    async startJob(kind) {
-      const id = await guard(() => api.tools.startJob(kind))
+    async startJob(kind, options) {
+      const id = await guard(() => api.tools.startJob(kind, options))
       if (id === null) get().toast('Another task is already running', 'info')
     },
 
@@ -556,11 +566,15 @@ export const useStore = create<Store>((set, get) => {
     onJobProgress(progress) {
       set({ job: progress })
       if (progress.finished) {
-        get().toast(
-          `${progress.kind === 'check-links' ? 'Link check' : 'Fetching details'} ${progress.cancelled ? 'cancelled' : 'finished'}${progress.summary ? `: ${progress.summary}` : ''}`,
-          progress.cancelled ? 'info' : 'success'
-        )
-        void get().refreshAll()
+        const label = progress.kind === 'check-links' ? 'Link check' : progress.kind === 'auto-tag' ? 'Auto-tagging' : 'Fetching details'
+        const message = label + ' ' + (progress.cancelled ? 'cancelled' : 'finished') + (progress.summary ? ': ' + progress.summary : '')
+        void get()
+          .refreshAll()
+          .then(() => {
+            // Suggestions produced by a run are waiting for review: offer to open them.
+            const review = progress.kind !== 'check-links' && get().pendingProposals > 0
+            get().toast(message, progress.cancelled ? 'info' : 'success', review ? { label: 'Review', onClick: () => get().openDialog({ type: 'review-tags' }) } : undefined)
+          })
       }
     },
 

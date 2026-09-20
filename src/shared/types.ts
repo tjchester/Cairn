@@ -334,6 +334,28 @@ export interface CairnApi {
   tagging: {
     /** Suggests tags for a saved bookmark or a draft. The built-in engine answers instantly; the local LLM (if enabled and asked for) may take seconds. */
     suggest(target: TaggingTarget, withLlm: boolean): Promise<SuggestResult>
+    /** Suggestions waiting for review, grouped by tag. */
+    review: {
+      count(): Promise<number>
+      groups(): Promise<ProposalGroup[]>
+      items(tag: string): Promise<ProposalItem[]>
+      /** Applies a tag to everyone it was suggested for (or just the given bookmarks). Returns how many were tagged. */
+      apply(tag: string, bookmarkIds?: number[]): Promise<number>
+      /** Skips a suggestion; it will not be suggested for those bookmarks again. */
+      reject(tag: string, bookmarkIds?: number[]): Promise<number>
+      /** Never suggest this tag again. */
+      never(tag: string): Promise<number>
+      applyAll(): Promise<number>
+      discardAll(): Promise<number>
+    }
+    runs: {
+      /** The latest auto-tagging run that added tags and has not been undone. */
+      last(): Promise<TagRunInfo | null>
+      /** Removes the tags a run added. Returns how many were removed. */
+      undo(runId: number): Promise<number>
+      /** Removes every automatically added tag. */
+      removeAuto(): Promise<number>
+    }
   }
   app: {
     version(): Promise<string>

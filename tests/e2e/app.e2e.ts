@@ -335,6 +335,61 @@ describe('Cairn (real app)', () => {
     await page.keyboard.press('Escape')
   })
 
+  it('auto-tags in bulk, reviews suggestions by tag, and can undo', async () => {
+    await cairn(async (api) => {
+      await api.bookmarks.create({ url: 'https://unreachable.invalid/docker-one', title: 'Docker networking explained' })
+      await api.bookmarks.create({ url: 'https://unreachable.invalid/docker-two', title: 'Docker Compose tutorial' })
+      return true
+    })
+    await page.reload()
+    await page.waitForSelector('.bm')
+
+    await page.getByRole('button', { name: 'Tools' }).click()
+    const tools = page.getByRole('dialog', { name: 'Duplicates & broken links' })
+    await tools.getByRole('button', { name: 'Auto-tag untagged bookmarks' }).click()
+    await expect(page.getByText(/tags? suggested for/).first()).toBeVisible({ timeout: 20_000 })
+    await shot('14-autotag-tools')
+    await tools.getByRole('button', { name: /Review suggestions/ }).click()
+
+    // Suggestions are grouped by tag: one decision covers many bookmarks.
+    const review = page.getByRole('dialog', { name: 'Review suggested tags' })
+    const docker = review.locator('.review-group', { hasText: 'docker' })
+    await expect(docker).toContainText('2 bookmarks')
+    await docker.locator('.review-toggle').click()
+    await expect(docker.locator('.review-items li')).toHaveCount(2)
+    await shot('15-review')
+
+    // Untick one bookmark and add the tag to the other only.
+    await docker.locator('.review-items li').first().locator('input[type=checkbox]').uncheck()
+    await docker.getByRole('button', { name: /Add to 1 selected/ }).click()
+    await expect(page.getByText(/1 bookmark tagged/)).toBeVisible()
+    const tagged = await cairn((api) => api.bookmarks.query({ scope: { kind: 'all' }, search: '#docker', sort: 'created', direction: 'desc', limit: 5, offset: 0 }))
+    expect(tagged.total).toBe(1)
+    expect(tagged.items[0]?.autoTags).toContain('docker')
+
+    // The other one is still pending: skip it, and it disappears from the review.
+    await review.locator('.review-group', { hasText: 'docker' }).getByRole('button', { name: 'Skip', exact: true }).click()
+    await expect(review.locator('.review-group', { hasText: 'docker' })).toHaveCount(0)
+
+    // Add everything that is left in one go, then undo that whole run from Tools.
+    const remaining = await cairn((api) => api.tagging.review.count())
+    expect(remaining).toBeGreaterThan(0)
+    await review.getByRole('button', { name: /Add all/ }).click()
+    await expect(page.getByText(/tags? added/).first()).toBeVisible()
+    expect(await cairn((api) => api.tagging.review.count())).toBe(0)
+    const run = await cairn((api) => api.tagging.runs.last())
+    expect(run).toMatchObject({ kind: 'review-all', undone: false })
+    await expect(review.getByText('Nothing to review.')).toBeVisible()
+    await page.keyboard.press('Escape')
+
+    await page.getByRole('button', { name: 'Tools' }).click()
+    await page.getByRole('dialog', { name: 'Duplicates & broken links' }).getByRole('button', { name: /Undo last run/ }).click()
+    await expect(page.getByText(/Removed \d+ automatic tag/)).toBeVisible()
+    const after = await cairn((api) => api.tagging.runs.last())
+    expect(after?.id).not.toBe(run?.id) // that run is undone; the earlier one (docker) is now the latest
+    await page.keyboard.press('Escape')
+  })
+
   it('has no renderer errors or CSP violations', () => {
     expect(problems).toEqual([])
   })

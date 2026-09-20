@@ -1356,3 +1356,115 @@ code {
   background: var(--surface-2);
   font-size: 12px;
 }
+
+/* ------------------------------------------------------------ review dialog */
+.review-intro {
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+.review-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.review-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.review-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+}
+.review-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+.review-toggle .twisty {
+  display: inline-block;
+}
+.review-tag {
+  font-weight: 600;
+}
+.review-badge {
+  padding: 0 7px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 18px;
+}
+.review-badge.existing {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.review-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+.review-items {
+  padding: 4px 10px 10px 30px;
+  border-top: 1px solid var(--border);
+}
+.review-items ul {
+  max-height: 220px;
+  margin: 6px 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+.review-items label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0;
+  cursor: pointer;
+}
+.review-items input[type='checkbox'] {
+  width: auto;
+  min-height: 0;
+}
+.review-item-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.review-item-why {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.review-selection {
+  display: flex;
+  gap: 6px;
+}
+.review-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 24px 0;
+  text-align: center;
+  color: var(--ok);
+}
+.auto-tag-extra {
+  margin-top: 10px;
+}

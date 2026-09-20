@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { Bookmark, TaggingMode, ThemeSetting } from '@shared/types'
+import type { Bookmark, JobKind, StartJobOptions, TagRunInfo, TaggingMode, ThemeSetting } from '@shared/types'
 import { Icon } from '../icons'
 import { useStore } from '../store'
 import { formatDate } from '../util'
@@ -188,7 +188,23 @@ export function ShortcutsDialog(): React.JSX.Element {
 
 // ------------------------------------------------------------------- Tools
 
-function JobPanel({ kind, title, description, actionLabel }: { kind: 'check-links' | 'fetch-metadata'; title: string; description: string; actionLabel: string }) {
+function JobPanel({
+  kind,
+  title,
+  description,
+  actionLabel,
+  options,
+  disabled,
+  children
+}: {
+  kind: JobKind
+  title: string
+  description: string
+  actionLabel: string
+  options?: StartJobOptions
+  disabled?: boolean
+  children?: React.ReactNode
+}) {
   const s = useStore()
   const job = s.job && s.job.kind === kind ? s.job : null
   const running = job !== null && !job.finished
@@ -218,13 +234,81 @@ function JobPanel({ kind, title, description, actionLabel }: { kind: 'check-link
         </>
       ) : (
         <div className="button-row">
-          <button className="btn primary" onClick={() => void s.startJob(kind)} disabled={s.job !== null && !s.job.finished}>
+          <button className="btn primary" onClick={() => void s.startJob(kind, options)} disabled={disabled || (s.job !== null && !s.job.finished)}>
             {actionLabel}
           </button>
           {job?.finished && <span className="muted">{job.cancelled ? 'Cancelled' : 'Done'}: {job.summary}</span>}
         </div>
       )}
+      {children}
     </section>
+  )
+}
+
+function AutoTagPanel(): React.JSX.Element {
+  const s = useStore()
+  const [lastRun, setLastRun] = useState<TagRunInfo | null>(null)
+  const jobKey = s.job ? s.job.id + ':' + s.job.finished : ''
+  useEffect(() => void api.tagging.runs.last().then(setLastRun), [jobKey, s.pendingProposals])
+  const mode = s.settings.tagging.mode
+  const busy = s.job !== null && !s.job.finished
+
+  const description =
+    mode === 'off'
+      ? 'Auto-tagging is turned off. Turn it on in Settings to use this.'
+      : mode === 'suggest'
+        ? 'Suggests tags for your bookmarks and queues them for you to review. Nothing changes until you accept a suggestion.'
+        : 'Adds tags to your bookmarks right away, marked as automatic. You can undo the whole run.'
+
+  const undo = async (): Promise<void> => {
+    if (!lastRun) return
+    const removed = await api.tagging.runs.undo(lastRun.id)
+    s.toast('Removed ' + removed + ' automatic tag' + (removed === 1 ? '' : 's'), 'success')
+    await s.refreshAll()
+    setLastRun(await api.tagging.runs.last())
+  }
+
+  const removeAll = async (): Promise<void> => {
+    const yes = await s.confirm({
+      title: 'Remove all automatic tags?',
+      message: 'Every tag added automatically is removed from your bookmarks. Tags you added yourself stay.',
+      confirmLabel: 'Remove automatic tags',
+      danger: true
+    })
+    if (!yes) return
+    const removed = await api.tagging.runs.removeAuto()
+    s.toast('Removed ' + removed + ' automatic tag' + (removed === 1 ? '' : 's'), 'success')
+    await s.refreshAll()
+  }
+
+  return (
+    <JobPanel kind="auto-tag" title="Auto-tag bookmarks" description={description} actionLabel="Auto-tag untagged bookmarks" options={{ scope: 'untagged' }} disabled={mode === 'off'}>
+      <div className="button-row auto-tag-extra">
+        <button
+          className="btn"
+          disabled={mode === 'off' || busy}
+          onClick={async () => {
+            const yes = await s.confirm({
+              title: 'Auto-tag all bookmarks?',
+              message: 'This includes bookmarks that already have tags. Tags they have are kept; new ones are ' + (mode === 'auto' ? 'added' : 'suggested for review') + '.',
+              confirmLabel: 'Auto-tag all'
+            })
+            if (yes) await s.startJob('auto-tag', { scope: 'all' })
+          }}
+        >
+          Auto-tag all bookmarks
+        </button>
+        <button className="btn" disabled={s.pendingProposals === 0} onClick={() => s.openDialog({ type: 'review-tags' })}>
+          <Icon name="sparkles" /> Review suggestions{s.pendingProposals > 0 ? ' (' + s.pendingProposals + ')' : ''}
+        </button>
+        <button className="btn" disabled={!lastRun || busy} onClick={() => void undo()} title={lastRun ? 'Removes the tags added by the last run' : 'Nothing to undo'}>
+          <Icon name="undo" /> Undo last run{lastRun ? ' (' + lastRun.tagsApplied + ' tags)' : ''}
+        </button>
+        <button className="btn danger-text" disabled={busy} onClick={() => void removeAll()}>
+          Remove all automatic tags
+        </button>
+      </div>
+    </JobPanel>
   )
 }
 
@@ -328,6 +412,7 @@ export function ToolsDialog(): React.JSX.Element {
         description="Downloads the title, description, cover image, site icon and page keywords (used for tag suggestions) for bookmarks that haven't been fetched yet, for example after an import, and retries the ones that failed."
         actionLabel="Fetch missing details"
       />
+      <AutoTagPanel />
     </Modal>
   )
 }
