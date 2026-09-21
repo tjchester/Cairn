@@ -471,6 +471,58 @@ describe('Cairn (real app)', () => {
     }
   })
 
+  it('carries on with the rest of the bookmarks when a model run is started again', async () => {
+    let asked = 0
+    const fake = createServer((req, res) => {
+      let raw = ''
+      req.on('data', (c) => (raw += c))
+      req.on('end', () => {
+        const reply = (body: unknown) => (res.writeHead(200, { 'content-type': 'application/json' }), res.end(JSON.stringify(body)))
+        if (req.url === '/api/version') return reply({ version: '9.9.9' })
+        if (req.url === '/api/tags') return reply({ models: [{ name: 'fake:1b' }] })
+        if (req.url === '/api/chat') {
+          asked++
+          return reply({ message: { role: 'assistant', content: '{"tags":["zebras"]}' } })
+        }
+        res.writeHead(404).end('{}')
+      })
+    })
+    await new Promise<void>((resolve) => fake.listen(0, '127.0.0.1', resolve))
+    const url = 'http://127.0.0.1:' + (fake.address() as AddressInfo).port
+    const before = await page.evaluate(() => window.cairn.settings.get())
+
+    try {
+      await page.evaluate((u) => window.cairn.settings.set({ tagging: { mode: 'suggest', llm: { enabled: true, model: 'fake:1b', baseUrl: u } } }), url)
+      await page.reload()
+      await page.waitForSelector('.bm')
+
+      // A first, partial run: the model looks at three bookmarks (as if the app had been closed after them).
+      const ids = (await cairn((api) => api.bookmarks.query({ scope: { kind: 'all' }, sort: 'created', direction: 'asc', limit: 3, offset: 0 }))).items.map((b) => b.id)
+      await page.evaluate((list) => window.cairn.tools.startJob('auto-tag', { scope: 'ids', ids: list, useLlm: true }), ids)
+      await expect.poll(() => cairn((api) => api.tagging.ollama.progress()).then((p) => p.seen), { timeout: 20_000 }).toBe(3)
+      const total = (await cairn((api) => api.tagging.ollama.progress())).total
+      expect(total).toBeGreaterThan(6)
+
+      // Opening Tools shows the place, and the main button carries on with the rest (all of them, not just untagged ones).
+      await page.getByRole('button', { name: 'Tools' }).click()
+      const tools = page.getByRole('dialog', { name: 'Duplicates & broken links' })
+      await tools.getByLabel(/Also use the local model \(fake:1b\)/).check()
+      await expect(tools.getByTestId('model-progress')).toContainText('looked at 3 of ' + total + ' bookmarks')
+      await shot('20-continue-with-model')
+      await tools.getByRole('button', { name: 'Continue with the model (' + (total - 3) + ' left)' }).click()
+      await expect(tools.getByRole('button', { name: 'The model has looked at everything' })).toBeDisabled({ timeout: 30_000 })
+      expect(asked).toBe(total) // every bookmark exactly once: the three from before were not asked about again
+      await page.keyboard.press('Escape')
+    } finally {
+      fake.closeAllConnections()
+      fake.close()
+      await page.evaluate(async (settings) => {
+        await window.cairn.tagging.review.discardAll()
+        await window.cairn.settings.set({ tagging: { mode: settings.tagging.mode, llm: { enabled: false, model: '', baseUrl: settings.tagging.llm.baseUrl } } })
+      }, before)
+    }
+  })
+
   it('adds a bookmark from a browser bookmarklet through the local API', async () => {
     // A stand-in for the site being read: the same page is what the "browser" shows and what the app then fetches.
     const site = createServer((_req, res) => {

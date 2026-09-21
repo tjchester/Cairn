@@ -433,11 +433,30 @@ function AutoTagPanel(): React.JSX.Element {
   const modelReady = s.settings.tagging.llm.enabled && s.settings.tagging.llm.model !== ''
   const jobKey = s.job ? s.job.id + ':' + s.job.finished : ''
   useEffect(() => void api.tagging.runs.last().then(setLastRun), [jobKey, s.pendingProposals])
-  useEffect(() => void api.tagging.ollama.progress().then(setModelProgress), [jobKey])
+  // Refreshed while a run is going, so "looked at" keeps up with it.
+  const doneTick = s.job && !s.job.finished ? Math.floor(s.job.done / 5) : 0
+  useEffect(() => void api.tagging.ollama.progress().then(setModelProgress), [jobKey, doneTick])
   const withModel = modelReady && useModel
   const modelOptions = { useLlm: withModel, redo: withModel && redo }
   const mode = s.settings.tagging.mode
   const busy = s.job !== null && !s.job.finished
+
+  // With the model, the main button covers every bookmark it has not looked at yet (not just the untagged ones), so
+  // that it always means "carry on with the rest". Without the model it stays "the untagged ones".
+  const left = modelProgress ? modelProgress.total - modelProgress.seen : 0
+  const count = (n: number): string => n.toLocaleString('en-US')
+  const modelRun = withModel && modelProgress !== null
+  const actionLabel = !modelRun
+    ? 'Auto-tag untagged bookmarks'
+    : redo
+      ? 'Redo everything with the model (' + count(modelProgress.total) + ')'
+      : modelProgress.seen === 0
+        ? 'Auto-tag everything with the model'
+        : left === 0
+          ? 'The model has looked at everything'
+          : 'Continue with the model (' + count(left) + ' left)'
+  const actionOptions: StartJobOptions = modelRun ? { scope: 'all', ...modelOptions } : { scope: 'untagged', ...modelOptions }
+  const nothingLeft = modelRun && left === 0 && !redo
 
   const description =
     mode === 'off'
@@ -468,7 +487,7 @@ function AutoTagPanel(): React.JSX.Element {
   }
 
   return (
-    <JobPanel kind="auto-tag" title="Auto-tag bookmarks" description={description} actionLabel="Auto-tag untagged bookmarks" options={{ scope: 'untagged', ...modelOptions }} disabled={mode === 'off'}>
+    <JobPanel kind="auto-tag" title="Auto-tag bookmarks" description={description} actionLabel={actionLabel} options={actionOptions} disabled={mode === 'off' || nothingLeft}>
       {modelReady && mode !== 'off' && (
         <label className="check">
           <input type="checkbox" checked={useModel} onChange={(e) => setUseModel(e.target.checked)} />
@@ -478,8 +497,8 @@ function AutoTagPanel(): React.JSX.Element {
       {withModel && modelProgress && (
         <>
           <p className="muted settings-note" data-testid="model-progress">
-            The model has looked at {modelProgress.seen.toLocaleString('en-US')} of {modelProgress.total.toLocaleString('en-US')} bookmarks so far. A run skips those and continues with the rest
-            {modelProgress.seen > 0 ? ' (use “Auto-tag all bookmarks” to include ones that already have tags).' : '.'}
+            The model has looked at {count(modelProgress.seen)} of {count(modelProgress.total)} bookmarks so far. With the model, a run covers every bookmark it has not looked at yet,
+            including ones that already have tags (tags they have are kept), so you can stop it and carry on later.
           </p>
           {modelProgress.seen > 0 && (
             <label className="check">
@@ -490,24 +509,22 @@ function AutoTagPanel(): React.JSX.Element {
         </>
       )}
       <div className="button-row auto-tag-extra">
-        <button
-          className="btn"
-          disabled={mode === 'off' || busy}
-          onClick={async () => {
-            const yes = await s.confirm({
-              title: 'Auto-tag all bookmarks?',
-              message:
-                'This includes bookmarks that already have tags. Tags they have are kept; new ones are ' +
-                (mode === 'auto' ? 'added' : 'suggested for review') +
-                '.' +
-                (withModel && !redo && modelProgress && modelProgress.seen > 0 ? ' The ' + modelProgress.seen.toLocaleString('en-US') + ' the model has already looked at are skipped.' : ''),
-              confirmLabel: 'Auto-tag all'
-            })
-            if (yes) await s.startJob('auto-tag', { scope: 'all', ...modelOptions })
-          }}
-        >
-          Auto-tag all bookmarks
-        </button>
+        {!modelRun && (
+          <button
+            className="btn"
+            disabled={mode === 'off' || busy}
+            onClick={async () => {
+              const yes = await s.confirm({
+                title: 'Auto-tag all bookmarks?',
+                message: 'This includes bookmarks that already have tags. Tags they have are kept; new ones are ' + (mode === 'auto' ? 'added' : 'suggested for review') + '.',
+                confirmLabel: 'Auto-tag all'
+              })
+              if (yes) await s.startJob('auto-tag', { scope: 'all' })
+            }}
+          >
+            Auto-tag all bookmarks
+          </button>
+        )}
         <button className="btn" disabled={s.pendingProposals === 0} onClick={() => s.openDialog({ type: 'review-tags' })}>
           <Icon name="sparkles" /> Review suggestions{s.pendingProposals > 0 ? ' (' + s.pendingProposals + ')' : ''}
         </button>

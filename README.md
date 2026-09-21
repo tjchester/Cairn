@@ -158,8 +158,8 @@ mapping onto your tags, blocklist and limits, and tags both sources agree on ran
   to it at all, and model suggestions always go through your review in *Suggest* mode.
 - **Speed** – with `qwen2.5:7b` on a CPU-only computer, about 3 seconds per bookmark after the first (which loads the model).
   Cairn remembers which bookmarks the model has classified, so a bulk *use local model* run can be cancelled, or the app closed,
-  and it continues where it stopped, for *Auto-tag all bookmarks* as well as the untagged ones. The panel shows how many the model has
-  looked at; tick *Ask the model about all of them again* to start over (for example with a different model). If the model stops
+  and it continues where it stopped. With the model ticked, the main button becomes *Continue with the model (N left)* and covers every
+  bookmark it has not looked at yet, tagged or not. The panel shows how many the model has looked at; tick *Ask the model about all of them again* to start over (for example with a different model). If the model stops
   answering, the run finishes with the built-in engine.
 - Recommended model: **`qwen2.5:7b`** (`ollama pull qwen2.5:7b`). `gemma3:12b` gave similar quality but was about six times
   slower on the same computer; `qwen2.5:3b` is a faster choice for very large libraries.
