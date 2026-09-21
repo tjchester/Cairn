@@ -236,6 +236,8 @@ export interface StartJobOptions {
   scope?: AutoTagScope
   ids?: number[]
   useLlm?: boolean
+  /** With the model: go over bookmarks it already classified again (by default they are skipped). */
+  redo?: boolean
 }
 
 /** The local API that lets a browser bookmarklet (and, later, command-line tools) talk to the running app. */
@@ -392,6 +394,8 @@ export interface CairnApi {
     ollama: {
       /** Checks the connection and the model; `overrides` lets Settings test values that are not saved yet. */
       status(overrides?: Partial<LlmSettings>): Promise<OllamaStatus>
+      /** How many bookmarks the model has already classified (a run skips those), out of all of them. */
+      progress(): Promise<{ seen: number; total: number }>
     }
     runs: {
       /** The latest auto-tagging run that added tags and has not been undone. */

@@ -761,20 +761,55 @@ export class Repo {
     return row ? this.toCandidate(row) : null
   }
 
-  /** Bookmarks to consider for auto-tagging: those with no tags, everything, or a given set. */
-  listForTagging(scope: 'untagged' | 'all' | 'ids', ids: number[] = [], options: { skipWithProposals?: boolean } = {}): TaggingCandidate[] {
+  /** The conditions that pick the bookmarks a tagging run looks at. */
+  private taggingFilter(scope: 'untagged' | 'all' | 'ids', options: { skipLlmSeen?: boolean }): string {
+    const parts = ['b.deleted_at IS NULL']
+    if (scope === 'untagged') parts.push('NOT EXISTS (SELECT 1 FROM bookmark_tags x WHERE x.bookmark_id = b.id)')
+    // A long run with the (slow) local model can be stopped and continued: what the model has handled is skipped.
+    if (options.skipLlmSeen) parts.push('NOT EXISTS (SELECT 1 FROM llm_seen s WHERE s.bookmark_id = b.id)')
+    return parts.join(' AND ')
+  }
+
+  /** Bookmarks to consider for auto-tagging: those with no tags, everything, or a given set. Oldest first. */
+  listForTagging(scope: 'untagged' | 'all' | 'ids', ids: number[] = [], options: { skipLlmSeen?: boolean } = {}): TaggingCandidate[] {
+    const where = this.taggingFilter(scope, options)
     const rows: Row[] = []
     if (scope === 'ids') {
       for (const part of chunk(ids)) {
-        rows.push(...this.all(Repo.CANDIDATE_SELECT + ' WHERE b.deleted_at IS NULL AND b.id IN (' + placeholders(part.length) + ') ORDER BY b.id', ...part))
+        rows.push(...this.all(Repo.CANDIDATE_SELECT + ' WHERE ' + where + ' AND b.id IN (' + placeholders(part.length) + ') ORDER BY b.id', ...part))
       }
     } else {
-      const untagged = scope === 'untagged' ? ' AND NOT EXISTS (SELECT 1 FROM bookmark_tags x WHERE x.bookmark_id = b.id)' : ''
-      // A long run (the local model is slow) can be stopped and resumed: bookmarks that already got proposals are done.
-      const processed = options.skipWithProposals ? ' AND NOT EXISTS (SELECT 1 FROM tag_proposals p WHERE p.bookmark_id = b.id)' : ''
-      rows.push(...this.all(Repo.CANDIDATE_SELECT + ' WHERE b.deleted_at IS NULL' + untagged + processed + ' ORDER BY b.id'))
+      rows.push(...this.all(Repo.CANDIDATE_SELECT + ' WHERE ' + where + ' ORDER BY b.id'))
     }
     return rows.map((row) => this.toCandidate(row))
+  }
+
+  /** How many bookmarks a run would look at, without loading them. */
+  countForTagging(scope: 'untagged' | 'all' | 'ids', ids: number[] = [], options: { skipLlmSeen?: boolean } = {}): number {
+    const where = this.taggingFilter(scope, options)
+    if (scope !== 'ids') return Number(this.get('SELECT COUNT(*) AS n FROM bookmarks b WHERE ' + where)?.n ?? 0)
+    let total = 0
+    for (const part of chunk(ids)) {
+      total += Number(this.get('SELECT COUNT(*) AS n FROM bookmarks b WHERE ' + where + ' AND b.id IN (' + placeholders(part.length) + ')', ...part)?.n ?? 0)
+    }
+    return total
+  }
+
+  /** Records that the local model has classified a bookmark (so a resumed run does not ask again). */
+  markLlmSeen(bookmarkId: number, model: string): void {
+    this.run(
+      'INSERT INTO llm_seen (bookmark_id, model, at) VALUES (?, ?, ?) ON CONFLICT(bookmark_id) DO UPDATE SET model = excluded.model, at = excluded.at',
+      bookmarkId,
+      model,
+      new Date().toISOString()
+    )
+  }
+
+  /** How many of your bookmarks the local model has already classified. */
+  llmProgress(): { seen: number; total: number } {
+    const total = Number(this.get('SELECT COUNT(*) AS n FROM bookmarks WHERE deleted_at IS NULL')?.n ?? 0)
+    const seen = Number(this.get('SELECT COUNT(*) AS n FROM llm_seen s JOIN bookmarks b ON b.id = s.bookmark_id WHERE b.deleted_at IS NULL')?.n ?? 0)
+    return { seen, total }
   }
 
   /**
@@ -810,15 +845,25 @@ export class Repo {
    * (kind 'capture') are not offered here: "undo last run" is about bulk runs.
    */
   lastRun(): TagRunInfo | null {
-    const r = this.get("SELECT * FROM tag_runs WHERE undone = 0 AND tags_applied > 0 AND kind <> 'capture' ORDER BY id DESC LIMIT 1")
+    // Counted from the tags themselves, not from the totals a run writes when it ends: a run that was interrupted
+    // (the app was closed part-way) never wrote them, but its tags are there and can be undone.
+    const r = this.get(
+      `SELECT r.*,
+              (SELECT COUNT(*) FROM bookmark_tags t WHERE t.run_id = r.id AND t.source <> 'user') AS live_tags,
+              (SELECT COUNT(DISTINCT t.bookmark_id) FROM bookmark_tags t WHERE t.run_id = r.id AND t.source <> 'user') AS live_bookmarks
+         FROM tag_runs r
+        WHERE r.undone = 0 AND r.kind <> 'capture'
+          AND EXISTS (SELECT 1 FROM bookmark_tags t WHERE t.run_id = r.id AND t.source <> 'user')
+        ORDER BY r.id DESC LIMIT 1`
+    )
     if (!r) return null
     return {
       id: Number(r.id),
       kind: String(r.kind),
       mode: String(r.mode),
       createdAt: String(r.created_at),
-      tagsApplied: Number(r.tags_applied),
-      bookmarksTouched: Number(r.bookmarks_touched),
+      tagsApplied: Number(r.live_tags),
+      bookmarksTouched: Number(r.live_bookmarks),
       undone: Number(r.undone) === 1
     }
   }

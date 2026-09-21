@@ -157,15 +157,18 @@ mapping onto your tags, blocklist and limits, and tags both sources agree on ran
   bulletproof, so a page that looks like it is trying to instruct the model (`ignore previous instructions…`) is not sent
   to it at all, and model suggestions always go through your review in *Suggest* mode.
 - **Speed** – with `qwen2.5:7b` on a CPU-only computer, about 3 seconds per bookmark after the first (which loads the model).
-  The bulk *use local model* run can be cancelled and resumed; bookmarks that already have suggestions are skipped. If the
-  model stops answering, the run finishes with the built-in engine.
+  Cairn remembers which bookmarks the model has classified, so a bulk *use local model* run can be cancelled, or the app closed,
+  and it continues where it stopped, for *Auto-tag all bookmarks* as well as the untagged ones. The panel shows how many the model has
+  looked at; tick *Ask the model about all of them again* to start over (for example with a different model). If the model stops
+  answering, the run finishes with the built-in engine.
 - Recommended model: **`qwen2.5:7b`** (`ollama pull qwen2.5:7b`). `gemma3:12b` gave similar quality but was about six times
   slower on the same computer; `qwen2.5:3b` is a faster choice for very large libraries.
 
 ### Data notes
 
-Auto-tagging needs a database upgrade (schema v2). Before upgrading an existing library Cairn copies it to
-`cairn.db.v1.bak` in the data folder. *Fetch missing details* now means "no page signals stored yet", so after the upgrade
+Auto-tagging needed database upgrades (schema v2, then v3 for remembering what the model has done). Before each upgrade Cairn copies
+your library to `cairn.db.v<old version>.bak` in the data folder; v3 also recovers, from earlier runs, which bookmarks the model
+had already handled. *Fetch missing details* now means "no page signals stored yet", so after the upgrade
 it re-reads pages once to learn what tagging needs; lookups that failed are retried on the next run and pages with no cover
 are not re-fetched forever.
 

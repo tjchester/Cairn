@@ -428,9 +428,14 @@ function AutoTagPanel(): React.JSX.Element {
   const s = useStore()
   const [lastRun, setLastRun] = useState<TagRunInfo | null>(null)
   const [useModel, setUseModel] = useState(false)
+  const [redo, setRedo] = useState(false)
+  const [modelProgress, setModelProgress] = useState<{ seen: number; total: number } | null>(null)
   const modelReady = s.settings.tagging.llm.enabled && s.settings.tagging.llm.model !== ''
   const jobKey = s.job ? s.job.id + ':' + s.job.finished : ''
   useEffect(() => void api.tagging.runs.last().then(setLastRun), [jobKey, s.pendingProposals])
+  useEffect(() => void api.tagging.ollama.progress().then(setModelProgress), [jobKey])
+  const withModel = modelReady && useModel
+  const modelOptions = { useLlm: withModel, redo: withModel && redo }
   const mode = s.settings.tagging.mode
   const busy = s.job !== null && !s.job.finished
 
@@ -463,12 +468,26 @@ function AutoTagPanel(): React.JSX.Element {
   }
 
   return (
-    <JobPanel kind="auto-tag" title="Auto-tag bookmarks" description={description} actionLabel="Auto-tag untagged bookmarks" options={{ scope: 'untagged', useLlm: modelReady && useModel }} disabled={mode === 'off'}>
+    <JobPanel kind="auto-tag" title="Auto-tag bookmarks" description={description} actionLabel="Auto-tag untagged bookmarks" options={{ scope: 'untagged', ...modelOptions }} disabled={mode === 'off'}>
       {modelReady && mode !== 'off' && (
         <label className="check">
           <input type="checkbox" checked={useModel} onChange={(e) => setUseModel(e.target.checked)} />
-          <span>Also use the local model ({s.settings.tagging.llm.model}): slower, expect a few seconds per bookmark, and it can be stopped and resumed</span>
+          <span>Also use the local model ({s.settings.tagging.llm.model}): slower, expect a few seconds per bookmark. It remembers what it has looked at, so you can stop and continue later</span>
         </label>
+      )}
+      {withModel && modelProgress && (
+        <>
+          <p className="muted settings-note" data-testid="model-progress">
+            The model has looked at {modelProgress.seen.toLocaleString('en-US')} of {modelProgress.total.toLocaleString('en-US')} bookmarks so far. A run skips those and continues with the rest
+            {modelProgress.seen > 0 ? ' (use “Auto-tag all bookmarks” to include ones that already have tags).' : '.'}
+          </p>
+          {modelProgress.seen > 0 && (
+            <label className="check">
+              <input type="checkbox" checked={redo} onChange={(e) => setRedo(e.target.checked)} />
+              <span>Ask the model about all of them again (for example after choosing a different model)</span>
+            </label>
+          )}
+        </>
       )}
       <div className="button-row auto-tag-extra">
         <button
@@ -477,10 +496,14 @@ function AutoTagPanel(): React.JSX.Element {
           onClick={async () => {
             const yes = await s.confirm({
               title: 'Auto-tag all bookmarks?',
-              message: 'This includes bookmarks that already have tags. Tags they have are kept; new ones are ' + (mode === 'auto' ? 'added' : 'suggested for review') + '.',
+              message:
+                'This includes bookmarks that already have tags. Tags they have are kept; new ones are ' +
+                (mode === 'auto' ? 'added' : 'suggested for review') +
+                '.' +
+                (withModel && !redo && modelProgress && modelProgress.seen > 0 ? ' The ' + modelProgress.seen.toLocaleString('en-US') + ' the model has already looked at are skipped.' : ''),
               confirmLabel: 'Auto-tag all'
             })
-            if (yes) await s.startJob('auto-tag', { scope: 'all', useLlm: modelReady && useModel })
+            if (yes) await s.startJob('auto-tag', { scope: 'all', ...modelOptions })
           }}
         >
           Auto-tag all bookmarks

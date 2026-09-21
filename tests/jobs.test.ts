@@ -597,6 +597,7 @@ describe('auto-tag job with a local model', () => {
 
     expect(llm.calls).toBe(4) // one success, then three failures in a row: the model is dropped for the rest
     expect(last.done).toBe(6) // ...but every bookmark was still processed
+    expect(repo.llmProgress().seen).toBe(1) // only the one the model really answered is recorded as done
     expect(last.note).toMatch(/local model stopped responding/)
     expect(last.summary).toMatch(/The local model failed for 3 bookmarks/)
     expect(repo.proposalItems('code').length).toBe(5) // built-in suggestions for all the GitHub ones, including those the model failed on
@@ -614,10 +615,77 @@ describe('auto-tag job with a local model', () => {
 
     expect(llm.calls).toBe(0)
     expect(last.note).toBeUndefined() // the model was not "given up on"
+    expect(repo.llmProgress().seen).toBe(0) // and these were not recorded as classified by it
     expect(last.summary).toMatch(/4 pages looked like an attempt to instruct the model/)
     expect(last.summary).not.toMatch(/failed/)
     expect(repo.proposalItems('pwned')).toEqual([])
     expect(repo.proposalItems('code').length).toBe(4) // built-in suggestions still apply
+  })
+
+  it('keeps its place when stopped part-way, also when it was started for all bookmarks, and says what it skipped', async () => {
+    let cancel: () => void = () => undefined
+    const llm = new FakeLlm((call) => {
+      if (call === 3) cancel() // the app is closed / the run is cancelled here
+      return ['zebras']
+    })
+    const { repo, events, runner } = setupLlm(llm)
+    for (let i = 0; i < 8; i++) repo.createBookmark({ url: 'https://example.org/post' + i, title: 'Notes on zebras ' + i, tags: ['mine'] }) // all tagged already
+    const id = runner.start('auto-tag', { scope: 'all', useLlm: true }) as string
+    cancel = () => runner.cancel(id)
+    const first = await finish(events)
+    expect(first.cancelled).toBe(true)
+    expect(first.total).toBe(8)
+    const doneFirst = llm.calls
+    expect(repo.llmProgress()).toEqual({ seen: doneFirst, total: 8 })
+
+    events.length = 0
+    runner.start('auto-tag', { scope: 'all', useLlm: true })
+    const second = await finish(events)
+    expect(second.total).toBe(8 - doneFirst) // only what is left
+    expect(second.note).toMatch(new RegExp(doneFirst + ' bookmarks the model already looked at earlier are skipped'))
+    expect(llm.calls).toBe(8) // never asked twice about the same bookmark
+    expect(repo.llmProgress()).toEqual({ seen: 8, total: 8 })
+
+    events.length = 0
+    runner.start('auto-tag', { scope: 'all', useLlm: true })
+    expect((await finish(events)).total).toBe(0) // nothing left
+    expect(llm.calls).toBe(8)
+  })
+
+  it('goes over everything again when asked to', async () => {
+    const llm = new FakeLlm(() => ['zebras'])
+    const { repo, events, runner } = setupLlm(llm)
+    bookmarks(repo, 3)
+    runner.start('auto-tag', { scope: 'all', useLlm: true })
+    await finish(events)
+    events.length = 0
+    runner.start('auto-tag', { scope: 'all', useLlm: true, redo: true })
+    const again = await finish(events)
+    expect(again.total).toBe(3)
+    expect(again.note).toBeUndefined()
+    expect(llm.calls).toBe(6)
+  })
+
+  it('does not let suggestions that only the built-in engine made keep a bookmark away from the model', async () => {
+    const llm = new FakeLlm(() => ['zebras'])
+    const { repo, events, runner } = setupLlm(llm)
+    const [a, b] = bookmarks(repo, 2)
+    const run = repo.createRun('fetch', 'suggest')
+    repo.addProposals(run, a!.id, [{ tag: 'notes', score: 0.6, origin: 'builtin', reason: 'title' }]) // e.g. left by "Fetch missing details"
+    runner.start('auto-tag', { scope: 'untagged', useLlm: true })
+    const last = await finish(events)
+    expect(last.total).toBe(2)
+    expect(llm.calls).toBe(2)
+    expect(repo.llmProgress().seen).toBe(2)
+    expect(b).toBeDefined()
+  })
+
+  it('does not record anything for a run without the model (built-in suggestions are instant and repeatable)', async () => {
+    const { repo, events, runner } = setupLlm(new FakeLlm(() => ['zebras']))
+    bookmarks(repo, 3)
+    runner.start('auto-tag', { scope: 'all' })
+    await finish(events)
+    expect(repo.llmProgress().seen).toBe(0)
   })
 
   it('can be cancelled while waiting on the model', async () => {

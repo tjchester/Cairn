@@ -426,6 +426,13 @@ describe('Cairn (real app)', () => {
       await shot('16-local-model-settings')
       await page.keyboard.press('Escape')
 
+      // The Tools panel says where a long model run stands (and would continue from).
+      await page.getByRole('button', { name: 'Tools' }).click()
+      const tools = page.getByRole('dialog', { name: 'Duplicates & broken links' })
+      await tools.getByLabel(/Also use the local model \(fake:1b\)/).check()
+      await expect(tools.getByTestId('model-progress')).toContainText(/The model has looked at 0 of \d+ bookmarks so far/)
+      await page.keyboard.press('Escape')
+
       // Suggestions from the model arrive after the built-in ones, and are marked as coming from it.
       await page.getByRole('button', { name: 'Add' }).click()
       const dialog = page.getByRole('dialog', { name: 'Add bookmark' })

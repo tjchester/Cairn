@@ -108,8 +108,16 @@ export class TaggingService {
     return mergeCandidates([...collectCandidates(input, context), ...fromModel], input, context)
   }
 
-  suggestForCandidateWithLlm(candidate: TaggingCandidate, context: EngineContext, signal?: AbortSignal): Promise<TagSuggestion[]> {
-    return this.suggestWithLlm(this.inputForCandidate(candidate), context, signal)
+  /** Like suggestWithLlm for a saved bookmark; on success the bookmark is recorded as classified by the model. */
+  async suggestForCandidateWithLlm(candidate: TaggingCandidate, context: EngineContext, signal?: AbortSignal): Promise<TagSuggestion[]> {
+    const suggestions = await this.suggestWithLlm(this.inputForCandidate(candidate), context, signal)
+    this.repo.markLlmSeen(candidate.id, this.settings().llm.model)
+    return suggestions
+  }
+
+  /** How many bookmarks the model has classified so far (so a long run's place is visible). */
+  llmProgress(): { seen: number; total: number } {
+    return this.repo.llmProgress()
   }
 
   /** Checks the connection and the chosen model. `overrides` lets Settings test values that are not saved yet. */

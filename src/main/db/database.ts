@@ -96,6 +96,31 @@ export const MIGRATIONS: string[] = [
   CREATE TABLE tag_blocklist (
     tag TEXT PRIMARY KEY COLLATE NOCASE
   );
+  `,
+  /* v3 */ `
+  -- Bookmarks the local model has already classified, so a long run can be stopped and continued (or repeated
+  -- later) without asking the model about the same bookmark twice. "model" is empty for rows recovered below.
+  CREATE TABLE llm_seen (
+    bookmark_id INTEGER PRIMARY KEY REFERENCES bookmarks(id) ON DELETE CASCADE,
+    model       TEXT NOT NULL DEFAULT '',
+    at          TEXT NOT NULL
+  );
+
+  -- Recover what earlier runs already did. A run that used the model has model-made tags (or suggestions) in it, and
+  -- every tag or suggestion the run made for other bookmarks came from the same pass over the model.
+  INSERT OR IGNORE INTO llm_seen (bookmark_id, model, at)
+  SELECT bt.bookmark_id, '', MIN(r.created_at)
+    FROM bookmark_tags bt JOIN tag_runs r ON r.id = bt.run_id
+   WHERE bt.source <> 'user' AND r.kind IN ('auto-tag', 'capture')
+     AND bt.run_id IN (SELECT run_id FROM bookmark_tags WHERE source = 'llm' AND run_id IS NOT NULL)
+   GROUP BY bt.bookmark_id;
+
+  INSERT OR IGNORE INTO llm_seen (bookmark_id, model, at)
+  SELECT p.bookmark_id, '', MIN(r.created_at)
+    FROM tag_proposals p JOIN tag_runs r ON r.id = p.run_id
+   WHERE r.kind IN ('auto-tag', 'capture')
+     AND p.run_id IN (SELECT run_id FROM tag_proposals WHERE origin = 'llm' AND run_id IS NOT NULL)
+   GROUP BY p.bookmark_id;
   `
 ]
 

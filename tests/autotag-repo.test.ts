@@ -47,6 +47,79 @@ describe('schema upgrade (v1 -> v2)', () => {
   })
 })
 
+describe('schema upgrade (v2 -> v3): remembering what the local model has done', () => {
+  it('recovers which bookmarks earlier model runs already handled, and nothing else', () => {
+    const file = join(dir, 'v2.db')
+    const old = new DatabaseSync(file)
+    old.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;')
+    old.exec(MIGRATIONS[0] as string)
+    old.exec(MIGRATIONS[1] as string)
+    old.exec('PRAGMA user_version = 2')
+    const at = '2026-09-20T17:00:00.000Z'
+    for (let i = 1; i <= 7; i++) old.exec(`INSERT INTO bookmarks (url, url_key, title, domain, created_at, updated_at) VALUES ('https://s${i}.com/', 's${i}.com', 'B${i}', 's${i}.com', '${at}', '${at}')`)
+    for (const [id, kind] of [[1, 'auto-tag'], [2, 'auto-tag'], [3, 'review']] as const) old.exec(`INSERT INTO tag_runs (id, kind, mode, created_at) VALUES (${id}, '${kind}', 'auto', '${at}')`)
+    for (const t of ['t1', 't2', 't3']) old.exec(`INSERT INTO tags (name) VALUES ('${t}')`)
+    const tag = (bookmark: number, tagId: number, source: string, run: number | null) =>
+      old.exec(`INSERT INTO bookmark_tags (bookmark_id, tag_id, source, run_id) VALUES (${bookmark}, ${tagId}, '${source}', ${run ?? 'NULL'})`)
+    tag(1, 1, 'llm', 2) //     a model run: this one and ...
+    tag(2, 1, 'builtin', 2) //  ... the others it handled in the same pass
+    tag(3, 1, 'builtin', 1) //  a built-in-only run (no model tag anywhere in it): not model-handled
+    tag(4, 1, 'user', null) //  the user's own tag: nothing to do with the model
+    tag(5, 1, 'llm', 3) //      accepted in a review run: says nothing about other bookmarks in that run
+    tag(6, 2, 'builtin', 3)
+    old.exec(`INSERT INTO tag_proposals (run_id, bookmark_id, tag, score, origin) VALUES (2, 7, 'x', 0.8, 'llm')`) // a pending suggestion the model made in that run
+    old.close()
+
+    const db = openDatabase(file)
+    const repo = new Repo(db)
+    const seen = repo.listForTagging('all').map((c) => c.id)
+    const skipped = seen.filter((id) => !repo.listForTagging('all', [], { skipLlmSeen: true }).some((c) => c.id === id))
+    expect(skipped).toEqual([1, 2, 7])
+    expect(repo.llmProgress()).toEqual({ seen: 3, total: 7 })
+    db.close()
+    expect(existsSync(file + '.v2.bak')).toBe(true) // the old database was copied first
+  })
+})
+
+describe('what the local model has already done', () => {
+  it('skips classified bookmarks, counts them, forgets them with the bookmark, and can be asked again', () => {
+    const repo = makeRepo()
+    const [a, b, c] = ['a', 'b', 'c'].map((n) => repo.createBookmark({ url: `https://${n}.com`, tags: n === 'c' ? ['mine'] : [] }))
+    repo.markLlmSeen(a!.id, 'qwen2.5:7b')
+    expect(repo.llmProgress()).toEqual({ seen: 1, total: 3 })
+    expect(repo.listForTagging('all', [], { skipLlmSeen: true }).map((x) => x.id)).toEqual([b!.id, c!.id])
+    expect(repo.listForTagging('untagged', [], { skipLlmSeen: true }).map((x) => x.id)).toEqual([b!.id]) // untagged AND not yet seen
+    expect(repo.listForTagging('all').map((x) => x.id)).toEqual([a!.id, b!.id, c!.id]) // without the option, everything (asking again)
+    expect(repo.countForTagging('all')).toBe(3)
+    expect(repo.countForTagging('all', [], { skipLlmSeen: true })).toBe(2)
+    expect(repo.countForTagging('ids', [a!.id, b!.id])).toBe(2)
+
+    repo.markLlmSeen(a!.id, 'other:1b') // asking again just updates the record
+    expect(repo.llmProgress().seen).toBe(1)
+
+    repo.trash([a!.id])
+    expect(repo.llmProgress()).toEqual({ seen: 0, total: 2 }) // the trash is not part of your library
+    repo.purge([a!.id])
+    expect(repo.llmProgress().seen).toBe(0)
+  })
+
+  it('offers to undo a run that was cut short, even though it never wrote its totals', () => {
+    const repo = makeRepo()
+    const a = repo.createBookmark({ url: 'https://a.com', tags: ['mine'] })
+    const b = repo.createBookmark({ url: 'https://b.com' })
+    const run = repo.createRun('auto-tag', 'auto') // ...and the app was closed before finishRun
+    repo.addAutoTags(a.id, ['x'], 'llm', run)
+    repo.addAutoTags(b.id, ['x', 'y'], 'llm', run)
+    expect(repo.lastRun()).toMatchObject({ id: run, tagsApplied: 3, bookmarksTouched: 2 })
+    expect(repo.undoRun(run)).toBe(3)
+    expect(repo.lastRun()).toBeNull()
+
+    const capture = repo.createRun('capture', 'auto') // single bookmarks saved through the local API stay out of this
+    repo.addAutoTags(a.id, ['z'], 'builtin', capture)
+    expect(repo.lastRun()).toBeNull()
+  })
+})
+
 describe('tag provenance', () => {
   it('records which tags were added automatically, and keeps that when the bookmark is edited', () => {
     const repo = makeRepo()

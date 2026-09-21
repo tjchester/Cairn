@@ -80,7 +80,8 @@ const bulkPatch = z.object({
 const startJobOptions = z.object({
   scope: z.enum(['untagged', 'all', 'ids']).optional(),
   ids: ids.optional(),
-  useLlm: z.boolean().optional()
+  useLlm: z.boolean().optional(),
+  redo: z.boolean().optional()
 })
 
 const taggingTarget = z.union([
@@ -244,6 +245,7 @@ export function registerIpc(ctx: IpcContext): void {
   // tagging
   handle('tagging:suggest', z.tuple([taggingTarget, z.boolean()]), ([target, withLlm]) => tagging.suggestResult(target, withLlm))
   handle('tagging:ollama:status', z.tuple([llmSchema.partial().optional()]), ([overrides]) => tagging.llmStatus(overrides ?? {}))
+  handle('tagging:ollama:progress', noArgs, () => tagging.llmProgress())
   handle('tagging:review:count', noArgs, () => repo.pendingProposalCount())
   handle('tagging:review:groups', noArgs, () => repo.proposalGroups())
   handle('tagging:review:items', z.tuple([text(200)]), ([tag]) => repo.proposalItems(tag))

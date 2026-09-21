@@ -68,7 +68,8 @@ const api: CairnApi = {
       discardAll: () => invoke('tagging:review:discardAll')
     },
     ollama: {
-      status: (overrides) => invoke('tagging:ollama:status', overrides)
+      status: (overrides) => invoke('tagging:ollama:status', overrides),
+      progress: () => invoke('tagging:ollama:progress')
     },
     runs: {
       last: () => invoke('tagging:runs:last'),

@@ -322,11 +322,18 @@ export class JobRunner {
       const status = await tagging.llmStatus()
       if (!status.ok || !status.modelReady) return finish('Could not start: ' + status.message)
     }
-    // A run with the (slow) model can be stopped and resumed: bookmarks that already have suggestions are skipped.
+    // A run with the (slow) model can be stopped and continued: bookmarks the model has already classified are
+    // skipped (unless the user asked to go over them again). Explicitly chosen bookmarks are always asked.
     const scope = options.scope ?? 'untagged'
-    const candidates = this.repo.listForTagging(scope, options.ids ?? [], { skipWithProposals: useLlm && scope === 'untagged' })
+    const ids = options.ids ?? []
+    const skipLlmSeen = useLlm && options.redo !== true && scope !== 'ids'
+    const candidates = this.repo.listForTagging(scope, ids, { skipLlmSeen })
+    const alreadyDone = skipLlmSeen ? this.repo.countForTagging(scope, ids) - candidates.length : 0
     progress.total = candidates.length
-    log('job-start', { job: 'auto-tag', mode, scope: options.scope ?? 'untagged', total: candidates.length })
+    if (alreadyDone > 0) {
+      progress.note = alreadyDone.toLocaleString('en-US') + ' bookmark' + (alreadyDone === 1 ? '' : 's') + ' the model already looked at earlier ' + (alreadyDone === 1 ? 'is' : 'are') + ' skipped, so this run only covers the rest.'
+    }
+    log('job-start', { job: 'auto-tag', mode, scope, total: candidates.length, alreadyDone })
     tick(true)
 
     const context = tagging.context()
