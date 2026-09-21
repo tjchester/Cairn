@@ -76,6 +76,12 @@ const api: CairnApi = {
       removeAuto: () => invoke('tagging:runs:removeAuto')
     }
   },
+  localApi: {
+    status: () => invoke('api:status'),
+    copyBookmarklet: () => invoke('api:copyBookmarklet'),
+    copyKey: () => invoke('api:copyKey'),
+    resetKey: () => invoke('api:resetKey')
+  },
   app: {
     version: () => invoke('app:version'),
     platform: process.platform,
@@ -86,7 +92,8 @@ const api: CairnApi = {
   on: {
     menuAction: (cb) => subscribe('menu:action', cb),
     jobProgress: (cb) => subscribe('job:progress', cb),
-    settingsChanged: (cb) => subscribe<null>('settings:changed', () => cb())
+    settingsChanged: (cb) => subscribe<null>('settings:changed', () => cb()),
+    captureChanged: (cb) => subscribe('capture:changed', cb)
   }
 }
 

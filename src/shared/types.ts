@@ -238,6 +238,32 @@ export interface StartJobOptions {
   useLlm?: boolean
 }
 
+/** The local API that lets a browser bookmarklet (and, later, command-line tools) talk to the running app. */
+export interface ApiSettings {
+  enabled: boolean
+  /** Fixed on purpose: the bookmarklet stored in your browser contains it. */
+  port: number
+}
+
+export const DEFAULT_API: ApiSettings = { enabled: false, port: 47821 }
+
+export interface ApiStatus {
+  enabled: boolean
+  running: boolean
+  port: number
+  /** What the bookmarklet talks to, e.g. http://127.0.0.1:47821 */
+  address: string
+  /** Why it is not running although it is switched on (for example, the port is taken). */
+  error: string | null
+}
+
+/** Sent to the window when a bookmark arrives through the local API (or finishes being filled in). */
+export interface CaptureEvent {
+  stage: 'saved' | 'exists' | 'enriched'
+  id: number
+  title: string
+}
+
 export interface Settings {
   theme: ThemeSetting
   view: ViewMode
@@ -245,10 +271,12 @@ export interface Settings {
   direction: SortDirection
   sidebarWidth: number
   tagging: TaggingSettings
+  api: ApiSettings
 }
 
-export type SettingsPatch = Partial<Omit<Settings, 'tagging'>> & {
+export type SettingsPatch = Partial<Omit<Settings, 'tagging' | 'api'>> & {
   tagging?: Partial<Omit<TaggingSettings, 'llm'>> & { llm?: Partial<LlmSettings> }
+  api?: Partial<ApiSettings>
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -257,7 +285,8 @@ export const DEFAULT_SETTINGS: Settings = {
   sort: 'created',
   direction: 'desc',
   sidebarWidth: 260,
-  tagging: DEFAULT_TAGGING
+  tagging: DEFAULT_TAGGING,
+  api: DEFAULT_API
 }
 
 export interface ImportResult {
@@ -296,6 +325,7 @@ export type MenuAction =
   | 'open-tools'
   | 'open-settings'
   | 'open-shortcuts'
+  | 'copy-bookmarklet'
 
 export interface CairnApi {
   collections: {
@@ -372,6 +402,16 @@ export interface CairnApi {
       removeAuto(): Promise<number>
     }
   }
+  /** The local API (browser bookmarklet, command-line tools). The secret key never reaches the renderer. */
+  localApi: {
+    status(): Promise<ApiStatus>
+    /** Puts the bookmarklet on the clipboard. Fails if the API is not running. */
+    copyBookmarklet(): Promise<void>
+    /** Puts the secret key on the clipboard, for scripts that call the JSON endpoint. */
+    copyKey(): Promise<void>
+    /** Makes a new secret key: bookmarklets copied earlier stop working. */
+    resetKey(): Promise<void>
+  }
   app: {
     version(): Promise<string>
     platform: string
@@ -383,5 +423,6 @@ export interface CairnApi {
     menuAction(cb: (action: MenuAction) => void): () => void
     jobProgress(cb: (progress: JobProgress) => void): () => void
     settingsChanged(cb: () => void): () => void
+    captureChanged(cb: (event: CaptureEvent) => void): () => void
   }
 }

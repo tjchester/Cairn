@@ -4,6 +4,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell, typ
 import { z } from 'zod'
 import type { Settings } from '@shared/types'
 import { isHttpUrl } from '@shared/url'
+import type { ApiController } from './api/controller'
 import type { Repo } from './db/repo'
 import { applySettingsPatch, llmSchema, readSettings, settingsPatchSchema } from './settings'
 import { EXPORT_EXTENSIONS, exportText, importText } from './services/importExport'
@@ -103,6 +104,7 @@ export interface IpcContext {
   repo: Repo
   jobs: JobRunner
   tagging: TaggingService
+  api: ApiController
   isTrustedUrl: (url: string) => boolean
   getWindow: () => BrowserWindow | null
 }
@@ -114,7 +116,7 @@ export function applyTheme(settings: Settings): void {
 }
 
 export function registerIpc(ctx: IpcContext): void {
-  const { repo, jobs, tagging } = ctx
+  const { repo, jobs, tagging, api } = ctx
 
   function handle<S extends z.ZodType>(channel: string, schema: S, fn: (args: z.output<S>, event: IpcMainInvokeEvent) => unknown): void {
     ipcMain.handle(channel, async (event, ...raw: unknown[]) => {
@@ -222,11 +224,22 @@ export function registerIpc(ctx: IpcContext): void {
 
   // settings
   handle('settings:get', noArgs, () => readSettings(repo))
-  handle('settings:set', z.tuple([settingsPatchSchema]), ([patch]) => {
+  handle('settings:set', z.tuple([settingsPatchSchema]), async ([patch]) => {
     const settings = applySettingsPatch(repo, patch)
     applyTheme(settings)
+    if (patch.api) await api.apply() // start, stop or move the local API
     return settings
   })
+
+  // local API (the secret key stays in the main process)
+  handle('api:status', noArgs, () => api.status())
+  handle('api:copyBookmarklet', noArgs, () => {
+    const status = api.status()
+    if (!status.running) throw new Error(status.error ?? 'The local API is turned off. Turn it on in Settings first.')
+    clipboard.writeText(api.bookmarklet())
+  })
+  handle('api:copyKey', noArgs, () => clipboard.writeText(api.key()))
+  handle('api:resetKey', noArgs, () => api.resetKey())
 
   // tagging
   handle('tagging:suggest', z.tuple([taggingTarget, z.boolean()]), ([target, withLlm]) => tagging.suggestResult(target, withLlm))

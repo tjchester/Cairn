@@ -2,6 +2,8 @@ import { existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, BrowserWindow, nativeTheme, session, shell } from 'electron'
 import type { JobProgress, MenuAction, ThemeSetting } from '@shared/types'
+import { ApiController } from './api/controller'
+import { IngestService } from './api/ingest'
 import { openDatabase } from './db/database'
 import { Repo } from './db/repo'
 import { applyTheme, readSettings, registerIpc } from './ipc'
@@ -48,12 +50,19 @@ if (!app.requestSingleInstanceLock()) {
     // Records rate limits and connectivity decisions during bulk jobs (Help > Show Connection Log).
     const logFile = join(app.getPath('userData'), 'connection.log')
     const tagging = new TaggingService(repo, () => readSettings(repo).tagging)
+    const log = createFileLogger(logFile)
     const jobs = new JobRunner(repo, (progress: JobProgress) => sendToWindow('job:progress', progress), {
-      log: createFileLogger(logFile),
+      log,
       tagging
     })
 
-    registerIpc({ repo, jobs, tagging, isTrustedUrl, getWindow: () => mainWindow })
+    // The local API (browser bookmarklet, command-line tools): runs only while the app is open and switched on.
+    const ingest = new IngestService({ repo, tagging, notify: (event) => sendToWindow('capture:changed', event) })
+    const api = new ApiController({ repo, ingest, version: app.getVersion(), getSettings: () => readSettings(repo).api, log })
+    void api.apply()
+    app.on('will-quit', () => void api.stop())
+
+    registerIpc({ repo, jobs, tagging, api, isTrustedUrl, getWindow: () => mainWindow })
 
     buildMenu({
       send: (action: MenuAction) => sendToWindow('menu:action', action),

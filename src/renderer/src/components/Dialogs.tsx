@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { Bookmark, JobKind, LlmSettings, OllamaStatus, StartJobOptions, TagRunInfo, TaggingMode, ThemeSetting } from '@shared/types'
+import type { ApiStatus, Bookmark, JobKind, LlmSettings, OllamaStatus, StartJobOptions, TagRunInfo, TaggingMode, ThemeSetting } from '@shared/types'
 import { Icon } from '../icons'
 import { useStore } from '../store'
 import { formatDate } from '../util'
@@ -36,6 +36,8 @@ export function SettingsDialog(): React.JSX.Element {
       </section>
 
       <AutoTaggingSettings />
+
+      <LocalApiSettings />
 
       <section className="settings-section">
         <h3>
@@ -76,6 +78,75 @@ export function SettingsDialog(): React.JSX.Element {
         </div>
       </section>
     </Modal>
+  )
+}
+
+// ------------------------------------------------------------ Browser & API
+
+/** The local API: lets a browser bookmarklet (and other programs on this computer) add bookmarks while Cairn is open. */
+function LocalApiSettings(): React.JSX.Element {
+  const s = useStore()
+  const { enabled, port } = s.settings.api
+  const [status, setStatus] = useState<ApiStatus | null>(null)
+  const [portText, setPortText] = useState(String(port))
+
+  useEffect(() => void api.localApi.status().then(setStatus), [enabled, port])
+  useEffect(() => setPortText(String(port)), [port])
+
+  const savePort = (): void => {
+    const next = Number(portText)
+    if (Number.isInteger(next) && next !== port) void s.updateSettings({ api: { port: next } })
+    else setPortText(String(port))
+  }
+
+  return (
+    <section className="settings-section">
+      <h3>
+        <Icon name="link" /> Browser &amp; API
+      </h3>
+      <label className="check">
+        <input type="checkbox" checked={enabled} onChange={(e) => void s.updateSettings({ api: { enabled: e.target.checked } })} />
+        <span>Let my browser and other programs on this computer add bookmarks</span>
+      </label>
+      <p className="muted settings-note">
+        A small server that only this computer can reach, running only while Cairn is open. Every request needs a secret key; the bookmarklet contains it.
+        Pages sent this way get their details fetched and are tagged just like ones you add here.
+      </p>
+
+      {enabled && (
+        <>
+          {status && (
+            <p className={'llm-status' + (status.running ? ' ok' : ' bad')} role="status" data-testid="api-status">
+              <Icon name={status.running ? 'ok' : 'warning'} size={14} /> {status.running ? 'Listening on ' + status.address : (status.error ?? 'Not running.')}
+            </p>
+          )}
+          <label className="field inline">
+            <span>Port</span>
+            <input
+              className="port-input"
+              inputMode="numeric"
+              value={portText}
+              onChange={(e) => setPortText(e.target.value.replace(/\D/g, '').slice(0, 5))}
+              onBlur={savePort}
+              onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+              aria-label="Port"
+            />
+          </label>
+          <p className="muted settings-note">The bookmarklet has the port built in: copy it again if you change this.</p>
+          <div className="button-row">
+            <button className="btn" disabled={!status?.running} onClick={() => void s.copyBookmarklet()}>
+              <Icon name="copy" /> Copy bookmarklet
+            </button>
+            <button className="btn" onClick={() => void api.localApi.copyKey().then(() => s.toast('Key copied. Scripts send it as "Authorization: Bearer <key>".', 'success'))}>
+              <Icon name="copy" /> Copy key (for scripts)
+            </button>
+            <button className="btn" onClick={() => void s.resetApiKey()}>
+              <Icon name="refresh" /> Make a new key
+            </button>
+          </div>
+        </>
+      )}
+    </section>
   )
 }
 

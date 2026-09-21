@@ -85,14 +85,18 @@ export function App(): React.JSX.Element {
           return s.openDialog({ type: 'settings' })
         case 'open-shortcuts':
           return s.openDialog({ type: 'shortcuts' })
+        case 'copy-bookmarklet':
+          return void s.copyBookmarklet()
       }
     })
     const offJob = api.on.jobProgress((p) => store.getState().onJobProgress(p))
     const offSettings = api.on.settingsChanged(() => void store.getState().reloadSettings())
+    const offCapture = api.on.captureChanged((e) => store.getState().onCapture(e))
     return () => {
       offMenu()
       offJob()
       offSettings()
+      offCapture()
     }
   }, [store, focusSearch])
 

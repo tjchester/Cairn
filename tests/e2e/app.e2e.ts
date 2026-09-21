@@ -60,7 +60,7 @@ describe('Cairn (real app)', () => {
     expect(isolation.require).toBe('undefined')
     expect(isolation.process).toBe('undefined')
     expect(isolation.ipcRenderer).toBe('undefined')
-    expect(isolation.api).toEqual(['app', 'bookmarks', 'collections', 'data', 'metadata', 'on', 'settings', 'tagging', 'tags', 'tools'])
+    expect(isolation.api).toEqual(['app', 'bookmarks', 'collections', 'data', 'localApi', 'metadata', 'on', 'settings', 'tagging', 'tags', 'tools'])
 
     const csp = await page.locator('meta[http-equiv="Content-Security-Policy"]').getAttribute('content')
     expect(csp).toContain("default-src 'none'")
@@ -461,6 +461,101 @@ describe('Cairn (real app)', () => {
       fake.closeAllConnections()
       fake.close()
       await page.evaluate(() => window.cairn.settings.set({ tagging: { llm: { enabled: false, model: '', baseUrl: 'http://127.0.0.1:11434' } } }))
+    }
+  })
+
+  it('adds a bookmark from a browser bookmarklet through the local API', async () => {
+    // A stand-in for the site being read: the same page is what the "browser" shows and what the app then fetches.
+    const site = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html' })
+      res.end('<!doctype html><title>Docker containers for beginners</title><meta name="description" content="Learn how Docker containers package software."><p>Docker is a container platform.</p>')
+    })
+    await new Promise<void>((resolve) => site.listen(0, '127.0.0.1', resolve))
+    const pageUrl = 'http://127.0.0.1:' + (site.address() as AddressInfo).port + '/docker-intro'
+    const apiPort = await new Promise<number>((resolve) => {
+      const probe = createServer()
+      probe.listen(0, '127.0.0.1', () => {
+        const port = (probe.address() as AddressInfo).port
+        probe.close(() => resolve(port))
+      })
+    })
+    const windows: Page[] = []
+    app.on('window', (w) => windows.push(w))
+
+    try {
+      // Choose the port before switching the API on, so the default one (which a real Cairn might be using) is never touched.
+      await page.evaluate((port) => window.cairn.settings.set({ api: { port }, tagging: { mode: 'suggest' } }), apiPort)
+      await page.reload()
+      await page.waitForSelector('.bm')
+
+      // Tools > Copy Bookmarklet asks before it switches the API on (the native menu sends this action to the window).
+      await app.evaluate(({ BrowserWindow }) => {
+        const main = BrowserWindow.getAllWindows().find((w) => !w.webContents.getURL().startsWith('http'))
+        main?.webContents.send('menu:action', 'copy-bookmarklet')
+      })
+      const ask = page.getByRole('dialog', { name: 'Turn on the local API?' })
+      await expect(ask).toBeVisible()
+      await ask.getByRole('button', { name: 'Turn on and copy' }).click()
+      await expect(page.getByText('Bookmarklet copied').last()).toBeVisible()
+      const bookmarklet = await app.evaluate(({ clipboard }) => clipboard.readText())
+      expect(bookmarklet).toMatch(/^javascript:/)
+      expect(bookmarklet).toContain('127.0.0.1:' + apiPort)
+
+      await page.getByRole('button', { name: 'Settings' }).click()
+      await expect(page.getByLabel('Let my browser and other programs on this computer add bookmarks')).toBeChecked()
+      await expect(page.getByTestId('api-status')).toContainText('Listening on http://127.0.0.1:' + apiPort)
+      await shot('18-api-settings')
+
+      // A script can use the JSON endpoint with the key from "Copy key"; without it, it is turned away.
+      await page.getByRole('button', { name: 'Copy key (for scripts)' }).click()
+      const key = await app.evaluate(({ clipboard }) => clipboard.readText())
+      expect(key).not.toMatch(/^javascript:/)
+      expect(bookmarklet).toContain(encodeURIComponent(key))
+      const endpoint = 'http://127.0.0.1:' + apiPort + '/api/v1/bookmarks'
+      const body = JSON.stringify({ url: pageUrl + '?via=script', title: 'From a script', tags: ['scripted'], fetch: false, autoTag: 'off' })
+      expect((await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json' }, body })).status).toBe(401)
+      const created = await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + key }, body })
+      expect(created.status).toBe(201)
+      expect(await created.json()).toMatchObject({ status: 'created', bookmark: { title: 'From a script', tags: ['scripted'] } })
+      await expect(page.getByText('Saved from your browser: From a script').last()).toBeVisible()
+      await page.keyboard.press('Escape')
+
+      // Click the bookmarklet on a page in a "browser" window.
+      await app.evaluate(
+        async ({ BrowserWindow }, { url, code }) => {
+          const win = new BrowserWindow({ width: 800, height: 600, show: false })
+          await win.loadURL(url)
+          void win.webContents.executeJavaScript(code.slice('javascript:'.length))
+        },
+        { url: pageUrl, code: bookmarklet }
+      )
+
+      await expect.poll(() => windows.some((w) => w.url().includes('/capture'))).toBe(true)
+      const popup = windows.find((w) => w.url().includes('/capture'))
+      await expect(popup!.getByText('Saved to Cairn')).toBeVisible()
+
+      // The main window notices, and the details and suggested tags arrive on their own.
+      await expect(page.getByText('Saved from your browser').last()).toBeVisible()
+      await expect
+        .poll(async () => (await cairn((api) => api.bookmarks.query({ scope: { kind: 'all' }, search: 'docker-intro', sort: 'created', direction: 'desc', limit: 3, offset: 0 }))).items[0]?.excerpt ?? '', { timeout: 20_000 })
+        .toContain('package software')
+      await expect.poll(() => cairn((api) => api.tagging.review.count()), { timeout: 20_000 }).toBeGreaterThan(0)
+      await expect(page.getByText('Review suggested tags')).toBeVisible()
+      await shot('19-saved-from-browser')
+
+      // Sending the same page again does not add a second copy.
+      const before = await cairn((api) => api.data.counts())
+      await app.evaluate(async ({ BrowserWindow }, { code }) => {
+        const win = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('/docker-intro'))
+        void win?.webContents.executeJavaScript(code.slice('javascript:'.length))
+      }, { code: bookmarklet })
+      await expect(page.getByText('Already saved').last()).toBeVisible()
+      expect((await cairn((api) => api.data.counts())).all).toBe(before.all)
+    } finally {
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().filter((w) => w.webContents.getURL().startsWith('http://127.0.0.1')).forEach((w) => w.destroy()))
+      await page.evaluate(() => window.cairn.settings.set({ api: { enabled: false } }))
+      site.closeAllConnections()
+      site.close()
     }
   })
 

@@ -805,9 +805,12 @@ export class Repo {
     this.run('UPDATE tag_runs SET tags_applied = ?, bookmarks_touched = ? WHERE id = ?', tagsApplied, bookmarksTouched, id)
   }
 
-  /** The most recent run that added tags and has not been undone. */
+  /**
+   * The most recent run that added tags and has not been undone. Single bookmarks saved through the local API
+   * (kind 'capture') are not offered here: "undo last run" is about bulk runs.
+   */
   lastRun(): TagRunInfo | null {
-    const r = this.get('SELECT * FROM tag_runs WHERE undone = 0 AND tags_applied > 0 ORDER BY id DESC LIMIT 1')
+    const r = this.get("SELECT * FROM tag_runs WHERE undone = 0 AND tags_applied > 0 AND kind <> 'capture' ORDER BY id DESC LIMIT 1")
     if (!r) return null
     return {
       id: Number(r.id),
@@ -882,6 +885,15 @@ export class Repo {
       avgScore: Number(r.avg_score),
       existing: Number(r.existing) === 1,
       origins: String(r.origins).split(',').filter((o): o is SuggestionOrigin => o === 'builtin' || o === 'llm')
+    }))
+  }
+
+  /** Suggestions still waiting for review on one bookmark, best first. */
+  pendingProposalsFor(bookmarkId: number): { tag: string; score: number; origin: SuggestionOrigin }[] {
+    return this.all("SELECT tag, score, origin FROM tag_proposals WHERE bookmark_id = ? AND status = 'pending' ORDER BY score DESC, tag", bookmarkId).map((r) => ({
+      tag: String(r.tag),
+      score: Number(r.score),
+      origin: (r.origin === 'llm' ? 'llm' : 'builtin') as SuggestionOrigin
     }))
   }
 
@@ -999,6 +1011,11 @@ export class Repo {
     const out: Record<string, string> = {}
     for (const row of this.all('SELECT key, value FROM settings')) out[String(row.key)] = String(row.value)
     return out
+  }
+
+  getSettingRaw(key: string): string | null {
+    const row = this.get('SELECT value FROM settings WHERE key = ?', key)
+    return row ? String(row.value) : null
   }
 
   setSettingRaw(key: string, value: string): void {

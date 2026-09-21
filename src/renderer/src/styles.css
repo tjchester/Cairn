@@ -1508,3 +1508,11 @@ code {
 .llm-status.bad {
   color: var(--warn);
 }
+p.llm-status {
+  display: flex;
+  margin: 6px 0 10px;
+}
+.port-input {
+  width: 84px;
+  text-align: right;
+}

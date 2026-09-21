@@ -3,6 +3,7 @@ import {
   DEFAULT_SETTINGS,
   type Bookmark,
   type BookmarkPatch,
+  type CaptureEvent,
   type Collection,
   type Counts,
   type ExportFormat,
@@ -118,6 +119,11 @@ interface Store {
   startJob(kind: JobKind, options?: StartJobOptions): Promise<void>
   cancelJob(): Promise<void>
   onJobProgress(progress: JobProgress): void
+
+  /** Puts the browser bookmarklet on the clipboard (offering to turn the local API on first). */
+  copyBookmarklet(): Promise<void>
+  resetApiKey(): Promise<void>
+  onCapture(event: CaptureEvent): void
 
   openAdd(urls?: string[]): void
   openDialog(dialog: Extract<DialogState, { type: 'settings' | 'tools' | 'shortcuts' | 'review-tags' }>): void
@@ -281,7 +287,7 @@ export const useStore = create<Store>((set, get) => {
     async updateSettings(patch) {
       const previous = get().settings
       // Simple settings apply at once; the nested tagging block waits for the saved (merged, validated) result.
-      const { tagging: _tagging, ...simple } = patch
+      const { tagging: _tagging, api: _api, ...simple } = patch
       set({ settings: { ...previous, ...simple } })
       const saved = await guard(() => api.settings.set(patch))
       if (!saved) {
@@ -576,6 +582,49 @@ export const useStore = create<Store>((set, get) => {
             get().toast(message, progress.cancelled ? 'info' : 'success', review ? { label: 'Review', onClick: () => get().openDialog({ type: 'review-tags' }) } : undefined)
           })
       }
+    },
+
+    async copyBookmarklet() {
+      const status = await guard(() => api.localApi.status())
+      if (!status) return
+      if (!status.enabled) {
+        const yes = await get().confirm({
+          title: 'Turn on the local API?',
+          message:
+            'The bookmarklet sends pages to Cairn through a small server that only this computer can reach. It runs only while Cairn is open, and every request needs a secret key that is built into the bookmarklet.',
+          confirmLabel: 'Turn on and copy'
+        })
+        if (!yes) return
+        await get().updateSettings({ api: { enabled: true } })
+      }
+      try {
+        await api.localApi.copyBookmarklet()
+      } catch (error) {
+        get().toast(errorMessage(error), 'error')
+        return
+      }
+      get().toast('Bookmarklet copied. In your browser, add a new bookmark and paste this as its address (URL).', 'success')
+    },
+
+    async resetApiKey() {
+      const yes = await get().confirm({
+        title: 'Make a new secret key?',
+        message: 'Bookmarklets you copied earlier will stop working until you copy the new one into your browser.',
+        confirmLabel: 'Make new key',
+        danger: true
+      })
+      if (yes) {
+        await guard(() => api.localApi.resetKey())
+        get().toast('New key made. Copy the bookmarklet again.', 'success')
+      }
+      get().openDialog({ type: 'settings' })
+    },
+
+    onCapture(event) {
+      if (event.stage === 'saved') get().toast('Saved from your browser: ' + event.title, 'success')
+      else if (event.stage === 'exists') get().toast('Already saved: ' + event.title, 'info')
+      // Details and suggested tags arrive later: bring the list and the review count up to date.
+      void get().refreshAll()
     },
 
     // ------------------------------------------------------------------ ui

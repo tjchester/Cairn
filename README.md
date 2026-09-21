@@ -11,6 +11,7 @@ Raindrop.io. It shares no code or assets with them and is not affiliated with an
 - **Collections** – nested, colorable, drag-and-drop to reorganize; deleting one sends its bookmarks to the Trash.
 - **Tags** – autocomplete, rename/merge/delete, drag bookmarks onto a tag to apply it.
 - **Auto-tagging** – built-in and offline, with an optional local model (see *Auto-tagging* below).
+- **Save from your browser** – a bookmarklet and a local-only API (see *Local API* below): one click sends the page to Cairn, which fetches its details and tags it.
 - **Three layouts** – list, grid and headlines; sort by date added/updated, title or website.
 - **Powerful search** – instant, substring matching across title, URL, note, description and tags, with operators:
 
@@ -48,7 +49,7 @@ npm run dev          # start with hot reload
 | `npm run dev` | Run the app with hot reload |
 | `npm run build` | Production build into `out/` |
 | `npm start` | Preview the production build |
-| `npm test` | Unit tests (database, search, import/export, network code, tagging, local-model client, licensing) |
+| `npm test` | Unit tests (database, search, import/export, network code, tagging, local-model client, local API, licensing) |
 | `npm run test:e2e` | Builds, then drives the real Electron app with Playwright and saves screenshots to `tests/e2e/screenshots/` |
 | `npm run typecheck` | TypeScript checks for main + renderer |
 | `npm run dist` / `dist:win` / `dist:mac` / `dist:linux` | Package installers into `dist/` (build each OS on that OS) |
@@ -71,6 +72,8 @@ src/
   main/                Electron main process
     db/                SQLite schema + migrations, repository, search-query parser
     services/          page metadata, link checker, background jobs, import/export formats
+    tagging/           auto-tagging engine, rules, optional local model (Ollama)
+    api/               local HTTP API and browser bookmarklet (loopback only)
     ipc.ts             every IPC handler; all input is validated with zod
     window.ts menu.ts  window (state, navigation guards), native menu
   preload/             the only bridge: a small typed `window.cairn` API
@@ -85,8 +88,8 @@ tests/                 unit tests + Playwright end-to-end test
   (`connect-src 'none'`: the UI cannot make network requests, all fetching happens in the main process); IPC senders and payloads
   are validated; navigation and `window.open` are blocked (links open in your browser); only `http(s)` URLs are stored or opened;
   CSV export neutralizes spreadsheet formulas.
-- **Privacy**: Cairn contacts a website only when you save/refresh a bookmark there, run *Check links*, or run *Fetch missing
-  details*. Cover images and site icons are loaded directly from the source sites when you view a list.
+- **Privacy**: Cairn contacts a website only when you save/refresh a bookmark there, run *Check links*, run *Fetch missing
+  details*, or send it from your browser with the bookmarklet. Cover images and site icons are loaded directly from the source sites when you view a list.
   During those bulk jobs, if several requests in a row fail, Cairn checks whether *your* internet is down. It asks a few
   places at once and the first answer wins: the last couple of sites that answered, `https://www.gstatic.com/generate_204`
   (a tiny connectivity-check endpoint), and `https://1.1.1.1/` (contacted by IP address, so it works even when DNS is
@@ -166,10 +169,20 @@ Auto-tagging needs a database upgrade (schema v2). Before upgrading an existing 
 it re-reads pages once to learn what tagging needs; lookups that failed are retried on the next run and pages with no cover
 are not re-fetched forever.
 
+## Local API and browser bookmarklet
+
+Off by default. Turn it on in *Settings → Browser & API* (or just choose *Tools → Copy Bookmarklet for Your Browser*, which offers to),
+then paste the copied snippet as the address of a new bookmark in your browser. Clicking it on any page saves that page to Cairn: the app
+fetches the details and suggests tags according to your *Auto-tagging* setting, exactly as if you had added it with *New bookmark*.
+
+The server listens on `127.0.0.1` only (port 47821, changeable), runs only while Cairn is open, and needs a secret key that only the bookmarklet
+(and *Copy key*) know. It also has a JSON endpoint, `POST /api/v1/bookmarks`, for scripts; the parameters mirror the *New bookmark* dialog and only
+`url` is required. Read endpoints for command-line tools come later. See [docs/api.md](docs/api.md) for the endpoint reference and the security model.
+
 ## Roadmap ideas
 
 Learn from your own tagging (similarity to already-tagged bookmarks) · embeddings for smarter matching · collection
-suggestions · local caching of covers/icons for offline use · browser extension · full-text "permanent copy" of pages ·
+suggestions · read endpoints and a command-line tool on the local API · local caching of covers/icons for offline use · browser extension · full-text "permanent copy" of pages ·
 reminders · optional sync between devices · auto-update.
 
 ## Licensing
