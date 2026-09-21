@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { ApiStatus, Bookmark, JobKind, LlmSettings, OllamaStatus, StartJobOptions, TagRunInfo, TaggingMode, ThemeSetting } from '@shared/types'
+import type { ApiStatus, Bookmark, JobKind, LlmSettings, OllamaStatus, StartJobOptions, TagRunInfo, TaggingMode, ThemeSetting, TidyLogInfo } from '@shared/types'
 import { Icon } from '../icons'
 import { useStore } from '../store'
 import { formatDate } from '../util'
@@ -429,6 +429,7 @@ function AutoTagPanel(): React.JSX.Element {
   const [lastRun, setLastRun] = useState<TagRunInfo | null>(null)
   const [useModel, setUseModel] = useState(false)
   const [redo, setRedo] = useState(false)
+  const [lastTidy, setLastTidy] = useState<TidyLogInfo | null>(null)
   const [modelProgress, setModelProgress] = useState<{ seen: number; total: number } | null>(null)
   const modelReady = s.settings.tagging.llm.enabled && s.settings.tagging.llm.model !== ''
   const jobKey = s.job ? s.job.id + ':' + s.job.finished : ''
@@ -436,6 +437,7 @@ function AutoTagPanel(): React.JSX.Element {
   // Refreshed while a run is going, so "looked at" keeps up with it.
   const doneTick = s.job && !s.job.finished ? Math.floor(s.job.done / 5) : 0
   useEffect(() => void api.tagging.ollama.progress().then(setModelProgress), [jobKey, doneTick])
+  useEffect(() => void api.tagging.tidy.last().then(setLastTidy), [jobKey, s.toasts.length, s.dialog?.type])
   const withModel = modelReady && useModel
   const modelOptions = { useLlm: withModel, redo: withModel && redo }
   const mode = s.settings.tagging.mode
@@ -530,6 +532,12 @@ function AutoTagPanel(): React.JSX.Element {
         </button>
         <button className="btn" disabled={!lastRun || busy} onClick={() => void undo()} title={lastRun ? 'Removes the tags added by the last run' : 'Nothing to undo'}>
           <Icon name="undo" /> Undo last run{lastRun ? ' (' + lastRun.tagsApplied + ' tags)' : ''}
+        </button>
+        <button className="btn" disabled={busy} onClick={() => s.openDialog({ type: 'tidy-tags' })} title="Merge look-alike tags and remove rare automatic ones">
+          <Icon name="tag" /> Tidy tags…
+        </button>
+        <button className="btn" disabled={busy || !lastTidy} onClick={() => lastTidy && void s.undoTidy(lastTidy.id).then(() => api.tagging.tidy.last().then(setLastTidy))} title={lastTidy ? 'Puts back what the last tidy changed' : 'Nothing to undo'}>
+          <Icon name="undo" /> Undo last tidy
         </button>
         <button className="btn danger-text" disabled={busy} onClick={() => void removeAll()}>
           Remove all automatic tags

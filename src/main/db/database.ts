@@ -121,6 +121,17 @@ export const MIGRATIONS: string[] = [
    WHERE r.kind IN ('auto-tag', 'capture')
      AND p.run_id IN (SELECT run_id FROM tag_proposals WHERE origin = 'llm' AND run_id IS NOT NULL)
    GROUP BY p.bookmark_id;
+  `,
+  /* v4 */ `
+  -- What "Tidy tags" changed, in enough detail to put it back (only the latest few are kept).
+  CREATE TABLE tidy_log (
+    id         INTEGER PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    merged     INTEGER NOT NULL DEFAULT 0,
+    removed    INTEGER NOT NULL DEFAULT 0,
+    payload    TEXT NOT NULL,
+    undone     INTEGER NOT NULL DEFAULT 0
+  );
   `
 ]
 

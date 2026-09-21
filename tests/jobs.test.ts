@@ -601,7 +601,9 @@ describe('auto-tag job with a local model', () => {
     expect(last.note).toMatch(/local model stopped responding/)
     expect(last.summary).toMatch(/The local model failed for 3 bookmarks/)
     expect(repo.proposalItems('code').length).toBe(5) // built-in suggestions for all the GitHub ones, including those the model failed on
-    expect(repo.proposalItems('zebras').length).toBe(1)
+    expect(repo.proposalItems('zebras')).toHaveLength(0) // a brand-new tag that only the model thought of, for one bookmark: held back
+    expect(repo.heldTags()).toEqual(['zebras'])
+    expect(last.summary).toMatch(/1 new tag idea from the model is held back/)
   })
 
   it('keeps a page that tries to instruct the model away from it, without counting that as a model failure', async () => {
@@ -686,6 +688,18 @@ describe('auto-tag job with a local model', () => {
     runner.start('auto-tag', { scope: 'all' })
     await finish(events)
     expect(repo.llmProgress().seen).toBe(0)
+  })
+
+  it('reuses the tags it has just made during the run, so spelling variants do not pile up', async () => {
+    const variants = ['ad-blocker', 'ad-blockers', 'ad-blocking', 'adblock', 'Ad Blockers']
+    const llm = new FakeLlm((call) => [variants[call - 1] as string])
+    const { repo, events, runner } = setupLlm(llm)
+    variants.forEach((_, i) => repo.createBookmark({ url: 'https://example.org/ads' + i, title: 'Blocking ads ' + i }))
+    runner.start('auto-tag', { useLlm: true })
+    const last = await finish(events)
+
+    expect(repo.proposalGroups()).toEqual([expect.objectContaining({ tag: 'ad-blocker', count: 5 })]) // one tag, not five spellings
+    expect(last.summary).toBe('5 tags suggested for 5 bookmarks. Review them in Tools.') // the first one waited for the second, then both were offered
   })
 
   it('can be cancelled while waiting on the model', async () => {

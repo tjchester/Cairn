@@ -28,8 +28,10 @@ export class TaggingService {
 
   /** Everything the engine needs, built from the current state of the library. Build it once per batch. */
   context(): EngineContext {
+    const vocabulary = new Vocabulary(this.repo.listTags())
+    for (const idea of this.repo.heldTags()) vocabulary.noteHeld(idea)
     return {
-      vocabulary: new Vocabulary(this.repo.listTags()),
+      vocabulary,
       rules: this.rules(),
       blocked: new Set(this.repo.blockedTags().map(canon)),
       maxTags: this.settings().maxTags
@@ -138,27 +140,81 @@ export class TaggingService {
     }
   }
 
+  /** A brand-new tag that only the local model thought of. Such tags wait until a second bookmark wants them too. */
+  private isModelOnlyNewTag(s: TagSuggestion): boolean {
+    return s.origin === 'llm' && s.sources.length === 1 && s.sources[0] === 'llm' && !this.repo.tagExists(s.tag)
+  }
+
   /**
    * Hands suggestions over according to the mode: "auto" adds them as automatic tags (undoable via the run),
    * "suggest" queues them for review. Anything the user already rejected for this bookmark is skipped.
+   *
+   * A brand-new tag that only the local model came up with is held back until a second bookmark wants the same tag
+   * (a tag used by one bookmark is clutter in the tag list, and models invent many of those). When the second one
+   * arrives, both get it. Pass the run's `context` so the rest of the run sees the tags created so far.
    */
-  deliver(bookmarkId: number, suggestions: readonly TagSuggestion[], mode: 'suggest' | 'auto', runId: number): { added: number; proposed: number } {
+  deliver(
+    bookmarkId: number,
+    suggestions: readonly TagSuggestion[],
+    mode: 'suggest' | 'auto',
+    runId: number,
+    context?: EngineContext
+  ): { added: number; proposed: number; held: number; promoted: number } {
     const rejected = this.repo.rejectedProposalTags(bookmarkId)
     const fresh = suggestions.filter((s) => !rejected.has(s.tag.toLowerCase()))
-    if (fresh.length === 0) return { added: 0, proposed: 0 }
-    if (mode === 'auto') {
-      let added = 0
-      for (const origin of ['builtin', 'llm'] as const) {
-        const tags = fresh.filter((s) => s.origin === origin).map((s) => s.tag)
-        if (tags.length > 0) added += this.repo.addAutoTags(bookmarkId, tags, origin, runId).length
+    let added = 0
+    let proposed = 0
+    let held = 0
+    let promoted = 0
+    const now: TagSuggestion[] = []
+
+    for (const s of fresh) {
+      if (!this.isModelOnlyNewTag(s)) {
+        now.push(s)
+        continue
       }
-      return { added, proposed: 0 }
+      const others = this.repo.heldBookmarkIds(s.tag).filter((id) => id !== bookmarkId)
+      if (others.length === 0 && !this.repo.pendingElsewhere(s.tag, bookmarkId)) {
+        this.repo.addProposals(runId, bookmarkId, [{ tag: s.tag, score: s.score, origin: s.origin, reason: s.reasons[0] ?? '' }], 'held')
+        context?.vocabulary.noteHeld(s.tag)
+        held++
+        continue
+      }
+      // The second bookmark that wants this tag: the earlier ones get it now too.
+      if (mode === 'auto') {
+        for (const earlier of this.repo.releaseHeld(s.tag)) {
+          const tagsAdded = this.repo.addAutoTags(earlier.bookmarkId, [s.tag], earlier.origin, runId).length
+          added += tagsAdded
+          if (tagsAdded > 0) {
+            promoted++
+            context?.vocabulary.add(s.tag)
+          }
+        }
+      } else {
+        const released = this.repo.heldToPending(s.tag)
+        proposed += released
+        promoted += released
+      }
+      now.push(s)
     }
-    const proposed = this.repo.addProposals(
-      runId,
-      bookmarkId,
-      fresh.map((s) => ({ tag: s.tag, score: s.score, origin: s.origin, reason: s.reasons[0] ?? '' }))
-    )
-    return { added: 0, proposed }
+
+    if (now.length > 0) {
+      if (mode === 'auto') {
+        for (const origin of ['builtin', 'llm'] as const) {
+          const tags = now.filter((s) => s.origin === origin).map((s) => s.tag)
+          if (tags.length > 0) added += this.repo.addAutoTags(bookmarkId, tags, origin, runId).length
+        }
+        for (const s of now) context?.vocabulary.add(s.tag)
+      } else {
+        proposed += this.repo.addProposals(
+          runId,
+          bookmarkId,
+          now.map((s) => ({ tag: s.tag, score: s.score, origin: s.origin, reason: s.reasons[0] ?? '' }))
+        )
+        // Not in the library yet, but the rest of the run should reuse this spelling.
+        for (const s of now) if (!this.repo.tagExists(s.tag)) context?.vocabulary.noteHeld(s.tag)
+      }
+    }
+    return { added, proposed, held, promoted }
   }
 }

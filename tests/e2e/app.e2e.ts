@@ -618,6 +618,49 @@ describe('Cairn (real app)', () => {
     }
   })
 
+  it('tidies look-alike tags in one step, and can put them back', async () => {
+    // Automatic tags such as a model might have made: three spellings of one idea, plus a one-off on a tagged bookmark.
+    await cairn(async (api) => {
+      const auto = (url: string, title: string, tags: string[], mine: string[] = []) =>
+        api.bookmarks.create({ url, title, tags: [...tags, ...mine], tagSources: Object.fromEntries(tags.map((t) => [t, 'llm' as const])) })
+      await auto('https://tidy.example/a', 'Tidy test A', ['ad-blocker'])
+      await auto('https://tidy.example/b', 'Tidy test B', ['ad-blockers'])
+      await auto('https://tidy.example/c', 'Tidy test C', ['ad-blocking', 'lonely-idea'], ['kept-by-me'])
+      return true
+    })
+    await page.reload()
+    await page.waitForSelector('.bm')
+
+    await page.getByRole('button', { name: 'Tools' }).click()
+    await page.getByRole('dialog', { name: 'Duplicates & broken links' }).getByRole('button', { name: /Tidy tags/ }).click()
+    const tidy = page.getByRole('dialog', { name: 'Tidy tags' })
+    await expect(tidy).toContainText('Merge look-alike tags')
+    const group = tidy.locator('.tidy-group', { hasText: 'ad-blockers' })
+    await expect(group).toContainText('ad-blocking')
+    await expect(group.getByRole('checkbox')).toBeChecked()
+    await expect(tidy.getByTestId('tidy-rare-summary')).toContainText('tag') // the rare-tag count is shown
+    await tidy.getByLabel(/Remove automatic tags used by/).uncheck() // leave everything else in this library alone
+    await shot('21-tidy-tags')
+    await tidy.getByRole('button', { name: 'Tidy', exact: true }).click()
+    await expect(page.getByText(/Tidied: 2 tags merged/).last()).toBeVisible()
+
+    const after = await cairn((api) => api.tags.list())
+    const names = after.map((t) => t.name)
+    expect(names).toContain('ad-blocker')
+    expect(names).not.toContain('ad-blockers')
+    expect(names).not.toContain('ad-blocking')
+    expect(after.find((t) => t.name === 'ad-blocker')?.count).toBe(3)
+    expect(names).toContain('kept-by-me') // yours: untouched
+
+    // Undo from Tools: the three spellings come back on the bookmarks they were on.
+    await page.getByRole('button', { name: 'Tools' }).click()
+    await page.getByRole('dialog', { name: 'Duplicates & broken links' }).getByRole('button', { name: 'Undo last tidy' }).click()
+    await expect(page.getByText(/Tidy undone/).last()).toBeVisible()
+    const restored = (await cairn((api) => api.tags.list())).map((t) => t.name)
+    expect(restored).toEqual(expect.arrayContaining(['ad-blocker', 'ad-blockers', 'ad-blocking', 'lonely-idea']))
+    await page.keyboard.press('Escape')
+  })
+
   it('has no renderer errors or CSP violations', () => {
     expect(problems).toEqual([])
   })

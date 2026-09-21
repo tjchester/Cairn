@@ -1,6 +1,6 @@
 import type { PageSignals, SuggestionSource, TagSuggestion } from '@shared/types'
 import { findTopics, type CompiledRules } from './rules'
-import { canon, STOPWORDS, tokenize, WORKFLOW_TAGS, wordCount } from './text'
+import { canon, GENERIC_TAGS, STOPWORDS, tokenize, WORKFLOW_TAGS, wordCount } from './text'
 import type { Vocabulary } from './vocabulary'
 
 // The built-in tagger. Every signal proposes candidate tags with a confidence; the merge step maps them onto the
@@ -198,6 +198,8 @@ export function mergeCandidates(candidates: readonly Candidate[], input: EngineI
     const aliases = candidate.aliases ?? ctx.rules.aliases.get(canon(candidate.tag)) ?? []
     const resolved = ctx.vocabulary.resolve(candidate.tag, aliases)
     if (!resolved) continue
+    // The model must not make up vague tags ("system", "service"); ones the library already has are fine.
+    if (candidate.source === 'llm' && !resolved.existing && GENERIC_TAGS.has(canon(resolved.name))) continue
     const key = canon(resolved.name)
     if (!key || present.has(key) || ctx.blocked.has(key) || WORKFLOW_TAGS.has(key)) continue
     if (!candidate.trusted && STOPWORDS.has(key)) continue

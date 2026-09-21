@@ -1469,6 +1469,112 @@ code {
   margin-top: 10px;
 }
 
+/* ------------------------------------------------------------ tidy tags */
+.tidy-intro {
+  margin: 0 0 10px;
+  font-size: 12px;
+}
+.tidy-section {
+  margin-bottom: 14px;
+}
+.tidy-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.tidy-heading h4 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 4px;
+}
+.tidy-bulk {
+  display: flex;
+  gap: 6px;
+}
+.tidy-note {
+  margin: 2px 0 6px;
+  font-size: 12px;
+}
+.tidy-groups {
+  max-height: 260px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.tidy-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.tidy-group:last-child {
+  border-bottom: 0;
+}
+.tidy-group.off .tidy-members {
+  opacity: 0.55;
+}
+.tidy-toggle input {
+  width: auto;
+  min-height: 0;
+}
+.tidy-members {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.tidy-member {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+.tidy-member input {
+  width: auto;
+  min-height: 0;
+}
+.tidy-member.keep .tidy-name {
+  font-weight: 600;
+}
+.tidy-summary {
+  margin-right: auto;
+  align-self: center;
+  font-size: 12px;
+}
+.tidy-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 4px 0 8px;
+}
+.tidy-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  font-size: 12px;
+}
+.tidy-chip.pick {
+  cursor: pointer;
+}
+.tidy-chip.pick input {
+  width: auto;
+  min-height: 0;
+}
+.tidy-chip.pick.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 /* ------------------------------------------------------------ local model */
 .llm-settings {
   margin-top: 14px;
@@ -1515,4 +1621,8 @@ p.llm-status {
 .port-input {
   width: 84px;
   text-align: right;
+}
+.tidy-section .check select {
+  width: auto;
+  display: inline-block;
 }

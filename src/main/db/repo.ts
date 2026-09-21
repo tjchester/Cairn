@@ -15,12 +15,33 @@ import type {
   Scope,
   SuggestionOrigin,
   TagInfo,
-  TagRunInfo
+  TagRunInfo,
+  TidyLogInfo,
+  TidyRequest,
+  TidyResult
 } from '@shared/types'
 import { coerceUrl, domainOf, isHttpUrl, urlKey } from '@shared/url'
+import { canon, GENERIC_TAGS } from '../tagging/text'
 import { buildSearchClauses, parseSearch, type SqlValue } from './search'
 
 type Row = Record<string, unknown>
+
+// What "Tidy tags" records so that it can be undone.
+interface TidyMergeRow {
+  b: number
+  from: string
+  to: string
+  source: string
+  runId: number | null
+  /** The kept tag's own row on this bookmark before the merge (null: the bookmark did not have it). */
+  keeperBefore: { source: string; runId: number | null } | null
+}
+interface TidyRemovedRow {
+  b: number
+  tag: string
+  source: string
+  runId: number | null
+}
 
 const TAG_SEPARATOR = '\x1f'
 const MAX_TITLE = 500
@@ -667,6 +688,185 @@ export class Repo {
     })
   }
 
+  // ------------------------------------------------------------- tidying tags
+
+  /** Every tag with how many (non-trashed) bookmarks use it, and how many of those uses are the user's own. */
+  tagStats(): { name: string; uses: number; userUses: number }[] {
+    return this.all(
+      `SELECT t.name AS name, COUNT(*) AS uses, COALESCE(SUM(bt.source = 'user'), 0) AS user_uses
+         FROM tags t
+         JOIN bookmark_tags bt ON bt.tag_id = t.id
+         JOIN bookmarks b ON b.id = bt.bookmark_id
+        WHERE b.deleted_at IS NULL
+        GROUP BY t.id
+        ORDER BY t.name COLLATE NOCASE`
+    ).map((r) => ({ name: String(r.name), uses: Number(r.uses), userUses: Number(r.user_uses) }))
+  }
+
+  /** The tags of every (non-trashed) bookmark. */
+  tagsByBookmark(): Map<number, string[]> {
+    const map = new Map<number, string[]>()
+    for (const r of this.all(
+      `SELECT bt.bookmark_id AS id, t.name AS name
+         FROM bookmark_tags bt JOIN tags t ON t.id = bt.tag_id JOIN bookmarks b ON b.id = bt.bookmark_id
+        WHERE b.deleted_at IS NULL`
+    )) {
+      const id = Number(r.id)
+      const list = map.get(id)
+      if (list) list.push(String(r.name))
+      else map.set(id, [String(r.name)])
+    }
+    return map
+  }
+
+  private tagId(name: string): number {
+    this.run('INSERT OR IGNORE INTO tags (name) VALUES (?)', name)
+    return Number((this.get('SELECT id FROM tags WHERE name = ?', name) as Row).id)
+  }
+
+  /**
+   * Merges look-alike tags and removes rare or vague automatic ones, as one step that can be undone.
+   * Safety rules, enforced here whatever the caller asks: a tag you added yourself is never removed; when two tags are
+   * merged the result counts as yours if either was; automatic tags keep the run they came from; and (optionally) a
+   * rare tag stays on a bookmark whose only tag it is.
+   */
+  applyTidy(request: TidyRequest): TidyResult {
+    return this.tx(() => {
+      const merges: TidyMergeRow[] = []
+      const removed: TidyRemovedRow[] = []
+      const affected = new Set<number>()
+      let mergedTags = 0
+      let keptAsOnlyTag = 0
+
+      for (const merge of request.merges) {
+        const keeper = this.get('SELECT id, name FROM tags WHERE name = ?', merge.keep)
+        if (!keeper) continue
+        for (const from of merge.from) {
+          const source = this.get('SELECT id, name FROM tags WHERE name = ?', from)
+          if (!source || Number(source.id) === Number(keeper.id)) continue
+          for (const row of this.all('SELECT bookmark_id, source, run_id FROM bookmark_tags WHERE tag_id = ?', Number(source.id))) {
+            const bookmarkId = Number(row.bookmark_id)
+            const rowSource = String(row.source)
+            const keeperRow = this.get('SELECT source, run_id FROM bookmark_tags WHERE bookmark_id = ? AND tag_id = ?', bookmarkId, Number(keeper.id))
+            merges.push({
+              b: bookmarkId,
+              from: String(source.name),
+              to: String(keeper.name),
+              source: rowSource,
+              runId: row.run_id === null ? null : Number(row.run_id),
+              keeperBefore: keeperRow ? { source: String(keeperRow.source), runId: keeperRow.run_id === null ? null : Number(keeperRow.run_id) } : null
+            })
+            if (keeperRow) {
+              if (rowSource === 'user' && String(keeperRow.source) !== 'user') {
+                this.run("UPDATE bookmark_tags SET source = 'user', run_id = NULL WHERE bookmark_id = ? AND tag_id = ?", bookmarkId, Number(keeper.id))
+              }
+              this.run('DELETE FROM bookmark_tags WHERE bookmark_id = ? AND tag_id = ?', bookmarkId, Number(source.id))
+            } else {
+              this.run('UPDATE bookmark_tags SET tag_id = ? WHERE bookmark_id = ? AND tag_id = ?', Number(keeper.id), bookmarkId, Number(source.id))
+            }
+            affected.add(bookmarkId)
+          }
+          // Suggestions still waiting under the old name follow it.
+          this.run("UPDATE OR IGNORE tag_proposals SET tag = ? WHERE tag = ? AND status IN ('pending', 'held')", String(keeper.name), String(source.name))
+          this.run("DELETE FROM tag_proposals WHERE tag = ? AND status IN ('pending', 'held')", String(source.name))
+          this.run('DELETE FROM tags WHERE id = ?', Number(source.id))
+          mergedTags++
+        }
+      }
+
+      // Removal: only automatic-only tags that are rare (or vague), never the user's.
+      const stats = new Map(this.tagStats().map((s) => [s.name.toLowerCase(), s]))
+      const eligible = new Map<string, { name: string; uses: number }>()
+      for (const name of request.remove) {
+        const stat = stats.get(name.toLowerCase())
+        if (!stat || stat.userUses > 0) continue
+        if (stat.uses > request.rareMaxUses && !GENERIC_TAGS.has(canon(stat.name))) continue
+        eligible.set(stat.name.toLowerCase(), { name: stat.name, uses: stat.uses })
+      }
+      if (eligible.size > 0) {
+        const perBookmark = new Map<number, { tag: string; source: string; runId: number | null }[]>()
+        for (const { name } of eligible.values()) {
+          for (const row of this.all('SELECT bt.bookmark_id AS b, bt.source AS source, bt.run_id AS run_id FROM bookmark_tags bt JOIN tags t ON t.id = bt.tag_id WHERE t.name = ?', name)) {
+            const list = perBookmark.get(Number(row.b)) ?? []
+            list.push({ tag: name, source: String(row.source), runId: row.run_id === null ? null : Number(row.run_id) })
+            perBookmark.set(Number(row.b), list)
+          }
+        }
+        const tagCount = new Map(this.all('SELECT bookmark_id AS b, COUNT(*) AS n FROM bookmark_tags GROUP BY bookmark_id').map((r) => [Number(r.b), Number(r.n)]))
+        for (const [bookmarkId, list] of perBookmark) {
+          let toRemove = list
+          if (request.keepOnlyTag && (tagCount.get(bookmarkId) ?? 0) - list.length <= 0) {
+            // Everything this bookmark has is going: keep its most used tag.
+            const keep = [...list].sort((a, b) => (eligible.get(b.tag.toLowerCase())?.uses ?? 0) - (eligible.get(a.tag.toLowerCase())?.uses ?? 0) || a.tag.localeCompare(b.tag))[0]
+            toRemove = list.filter((entry) => entry !== keep)
+            keptAsOnlyTag++
+          }
+          for (const entry of toRemove) {
+            this.run('DELETE FROM bookmark_tags WHERE bookmark_id = ? AND tag_id = (SELECT id FROM tags WHERE name = ?)', bookmarkId, entry.tag)
+            removed.push({ b: bookmarkId, tag: entry.tag, source: entry.source, runId: entry.runId })
+            affected.add(bookmarkId)
+          }
+        }
+      }
+
+      this.pruneTags()
+      this.refreshSearchText([...affected])
+
+      if (merges.length === 0 && removed.length === 0) return { id: null, merged: 0, removed: 0, keptAsOnlyTag }
+      const id = this.insert(
+        'INSERT INTO tidy_log (created_at, merged, removed, payload) VALUES (?, ?, ?, ?)',
+        new Date().toISOString(),
+        mergedTags,
+        removed.length,
+        JSON.stringify({ merges, removed })
+      )
+      this.run('DELETE FROM tidy_log WHERE id NOT IN (SELECT id FROM tidy_log ORDER BY id DESC LIMIT 3)')
+      return { id, merged: mergedTags, removed: removed.length, keptAsOnlyTag }
+    })
+  }
+
+  /** The latest tidy that has not been undone. */
+  lastTidy(): TidyLogInfo | null {
+    const r = this.get('SELECT id, created_at, merged, removed FROM tidy_log WHERE undone = 0 ORDER BY id DESC LIMIT 1')
+    return r ? { id: Number(r.id), createdAt: String(r.created_at), merged: Number(r.merged), removed: Number(r.removed) } : null
+  }
+
+  /** Puts back exactly what a tidy changed (merged tags come apart again, removed tags return). */
+  undoTidy(id: number): TidyResult {
+    return this.tx(() => {
+      const row = this.get('SELECT merged, removed, payload, undone FROM tidy_log WHERE id = ?', id)
+      if (!row) throw new Error('That tidy is no longer available to undo.')
+      if (Number(row.undone) === 1) throw new Error('That tidy was already undone.')
+      const payload = JSON.parse(String(row.payload)) as { merges: TidyMergeRow[]; removed: TidyRemovedRow[] }
+      const affected = new Set<number>()
+      const exists = (bookmarkId: number): boolean => this.get('SELECT 1 AS x FROM bookmarks WHERE id = ?', bookmarkId) !== undefined
+
+      // Newest change first, so a bookmark that took part in several merges unwinds in the right order.
+      for (const entry of payload.removed) {
+        if (!exists(entry.b)) continue
+        this.run('INSERT OR IGNORE INTO bookmark_tags (bookmark_id, tag_id, source, run_id) VALUES (?, ?, ?, ?)', entry.b, this.tagId(entry.tag), entry.source, entry.runId)
+        affected.add(entry.b)
+      }
+      for (const entry of [...payload.merges].reverse()) {
+        if (!exists(entry.b)) continue
+        this.run('INSERT OR IGNORE INTO bookmark_tags (bookmark_id, tag_id, source, run_id) VALUES (?, ?, ?, ?)', entry.b, this.tagId(entry.from), entry.source, entry.runId)
+        const keeper = this.get('SELECT id FROM tags WHERE name = ?', entry.to)
+        if (keeper) {
+          if (entry.keeperBefore === null) {
+            this.run('DELETE FROM bookmark_tags WHERE bookmark_id = ? AND tag_id = ?', entry.b, Number(keeper.id))
+          } else {
+            this.run('UPDATE bookmark_tags SET source = ?, run_id = ? WHERE bookmark_id = ? AND tag_id = ?', entry.keeperBefore.source, entry.keeperBefore.runId, entry.b, Number(keeper.id))
+          }
+        }
+        affected.add(entry.b)
+      }
+      this.run('UPDATE tidy_log SET undone = 1 WHERE id = ?', id)
+      this.pruneTags()
+      this.refreshSearchText([...affected])
+      return { id, merged: Number(row.merged), removed: Number(row.removed), keptAsOnlyTag: 0 }
+    })
+  }
+
   // ------------------------------------------------------- derived / metadata
 
   private refreshSearchText(ids: number[]): void {
@@ -893,20 +1093,78 @@ export class Repo {
 
   // -- proposals (suggestions waiting for review)
 
-  addProposals(runId: number | null, bookmarkId: number, items: { tag: string; score: number; origin: SuggestionOrigin; reason: string }[]): number {
+  /**
+   * Records suggestions for a bookmark. "held" ones are tag ideas that are not shown yet: a brand-new tag that only the
+   * model came up with waits until a second bookmark wants it too (see releaseHeld / heldToPending).
+   */
+  addProposals(
+    runId: number | null,
+    bookmarkId: number,
+    items: { tag: string; score: number; origin: SuggestionOrigin; reason: string }[],
+    status: 'pending' | 'held' = 'pending'
+  ): number {
     let added = 0
     for (const item of items) {
       added += this.run(
-        'INSERT OR IGNORE INTO tag_proposals (run_id, bookmark_id, tag, score, origin, reason) VALUES (?, ?, ?, ?, ?, ?)',
+        'INSERT OR IGNORE INTO tag_proposals (run_id, bookmark_id, tag, score, origin, reason, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
         runId,
         bookmarkId,
         item.tag,
         item.score,
         item.origin,
-        item.reason
+        item.reason,
+        status
       )
     }
     return added
+  }
+
+  /** Bookmarks that wanted this (new) tag but were held back. */
+  heldBookmarkIds(tag: string): number[] {
+    return this.all(
+      "SELECT p.bookmark_id AS id FROM tag_proposals p JOIN bookmarks b ON b.id = p.bookmark_id WHERE p.tag = ? AND p.status = 'held' AND b.deleted_at IS NULL ORDER BY p.bookmark_id",
+      tag
+    ).map((r) => Number(r.id))
+  }
+
+  /** Whether some other bookmark already has this tag waiting for review. */
+  pendingElsewhere(tag: string, bookmarkId: number): boolean {
+    return (
+      Number(
+        this.get("SELECT COUNT(*) AS n FROM tag_proposals p JOIN bookmarks b ON b.id = p.bookmark_id WHERE p.tag = ? AND p.status = 'pending' AND p.bookmark_id <> ? AND b.deleted_at IS NULL", tag, bookmarkId)?.n ?? 0
+      ) > 0
+    )
+  }
+
+  /** Every tag idea currently held back (one bookmark each so far). */
+  heldTags(): string[] {
+    return this.all("SELECT DISTINCT tag FROM tag_proposals WHERE status = 'held' ORDER BY tag COLLATE NOCASE").map((r) => String(r.tag))
+  }
+
+  heldCount(): number {
+    return Number(this.get("SELECT COUNT(DISTINCT tag) AS n FROM tag_proposals WHERE status = 'held'")?.n ?? 0)
+  }
+
+  /** A held tag now has a second bookmark: the earlier ones become ordinary suggestions (for review). */
+  heldToPending(tag: string): number {
+    return this.run("UPDATE tag_proposals SET status = 'pending' WHERE tag = ? AND status = 'held'", tag)
+  }
+
+  /** A held tag now has a second bookmark: hands back the earlier bookmarks (and forgets the held rows) so the tag can be applied. */
+  releaseHeld(tag: string): { bookmarkId: number; origin: SuggestionOrigin }[] {
+    return this.tx(() => {
+      const rows = this.all(
+        "SELECT p.bookmark_id AS id, p.origin AS origin FROM tag_proposals p JOIN bookmarks b ON b.id = p.bookmark_id WHERE p.tag = ? AND p.status = 'held' AND b.deleted_at IS NULL",
+        tag
+      ).map((r) => ({ bookmarkId: Number(r.id), origin: (r.origin === 'llm' ? 'llm' : 'builtin') as SuggestionOrigin }))
+      this.run("DELETE FROM tag_proposals WHERE tag = ? AND status = 'held'", tag)
+      return rows
+    })
+  }
+
+  /** Whether any bookmark currently has a tag of this name. */
+  tagExists(name: string): boolean {
+    return this.get('SELECT 1 AS x FROM tags WHERE name = ?', name) !== undefined
   }
 
   pendingProposalCount(): number {

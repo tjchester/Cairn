@@ -164,9 +164,26 @@ mapping onto your tags, blocklist and limits, and tags both sources agree on ran
 - Recommended model: **`qwen2.5:7b`** (`ollama pull qwen2.5:7b`). `gemma3:12b` gave similar quality but was about six times
   slower on the same computer; `qwen2.5:3b` is a faster choice for very large libraries.
 
+### Keeping the tag list tidy
+
+Models like to invent look-alike and one-off tags, so Cairn works against that:
+
+- **New tags are reused as they are made.** A bulk run keeps its list of existing tags up to date, so a tag created early in a run
+  is what later bookmarks get ("ad-blocker" is not followed by "ad-blockers", "ad-blocking" and "adblock"). Plurals, capitals,
+  hyphens and `-ing` / `-er` forms are folded onto the tag you already have.
+- **One-bookmark tags wait.** In bulk runs, a brand-new tag that only the model thought of is held back until a second bookmark
+  wants the same tag; then both get it (or, in Suggest mode, both are offered for review). Tags you already have, and tags the
+  built-in engine agrees with, are not held. The run's summary says how many ideas are being held.
+- **Vague tags are refused** ("system", "service", "client", "project"…) as new tags from the model, and the prompt asks for broad,
+  reusable topics.
+- **Tidy tags…** (in Tools) cleans up what exists: it lists groups of look-alike tags to merge (you pick the tag to keep in each
+  group), automatic tags used by only a few bookmarks (1, 2, 3 or 5), and vague automatic ones. Nothing changes until you press
+  *Tidy*. Tags you added yourself are never removed, a rare tag is kept when it is a bookmark's only tag (you can turn that off),
+  merged tags keep track of which run made them, and *Undo last tidy* puts everything back exactly.
+
 ### Data notes
 
-Auto-tagging needed database upgrades (schema v2, then v3 for remembering what the model has done). Before each upgrade Cairn copies
+Auto-tagging needed database upgrades (schema v2, v3 for remembering what the model has done, v4 for the Tidy tags undo log). Before each upgrade Cairn copies
 your library to `cairn.db.v<old version>.bak` in the data folder; v3 also recovers, from earlier runs, which bookmarks the model
 had already handled. *Fetch missing details* now means "no page signals stored yet", so after the upgrade
 it re-reads pages once to learn what tagging needs; lookups that failed are retried on the next run and pages with no cover

@@ -229,6 +229,63 @@ export interface TagRunInfo {
   undone: boolean
 }
 
+// ---- Tidy tags: merging look-alike tags and removing rare or vague automatic ones
+
+export interface TidyTag {
+  name: string
+  /** Bookmarks (not in the Trash) that have it. */
+  uses: number
+  /** At least one bookmark has it because you added it yourself: such tags are never removed. */
+  yours: boolean
+}
+
+export interface TidyGroup {
+  id: string
+  members: TidyTag[]
+  /** The tag the others would be merged into. */
+  keep: string
+  /** The members differ only by capitals, hyphens or a plural "s" (as opposed to a looser resemblance). */
+  spellingOnly: boolean
+  /** Ticked by default: not the case when it would merge two tags that are both yours. */
+  selected: boolean
+}
+
+export interface TidyPlan {
+  totalTags: number
+  /** Tags used by exactly one bookmark. */
+  oneUse: number
+  groups: TidyGroup[]
+  /** Automatic tags used by few bookmarks (none of which you added yourself). */
+  rare: { maxUses: number; tags: TidyTag[]; uses: number; /** Bookmarks whose only tags are rare ones. */ onlyTag: number }
+  /** Automatic tags that say little ("system", "service"), used more than the rare limit. */
+  vague: TidyTag[]
+}
+
+export interface TidyRequest {
+  merges: { keep: string; from: string[] }[]
+  remove: string[]
+  rareMaxUses: number
+  /** Do not remove a rare tag from a bookmark it is the only tag of. */
+  keepOnlyTag: boolean
+}
+
+export interface TidyResult {
+  id: number | null
+  /** Tags folded into another. */
+  merged: number
+  /** Tag uses removed from bookmarks. */
+  removed: number
+  /** Rare tags left in place because they were the bookmark's only tag. */
+  keptAsOnlyTag: number
+}
+
+export interface TidyLogInfo {
+  id: number
+  createdAt: string
+  merged: number
+  removed: number
+}
+
 export type AutoTagScope = 'untagged' | 'all' | 'ids'
 
 export interface StartJobOptions {
@@ -396,6 +453,14 @@ export interface CairnApi {
       status(overrides?: Partial<LlmSettings>): Promise<OllamaStatus>
       /** How many bookmarks the model has already classified (a run skips those), out of all of them. */
       progress(): Promise<{ seen: number; total: number }>
+    }
+    tidy: {
+      /** What could be tidied (nothing is changed). */
+      plan(rareMaxUses: number): Promise<TidyPlan>
+      apply(request: TidyRequest): Promise<TidyResult>
+      /** The latest tidy that has not been undone. */
+      last(): Promise<TidyLogInfo | null>
+      undo(id: number): Promise<TidyResult>
     }
     runs: {
       /** The latest auto-tagging run that added tags and has not been undone. */

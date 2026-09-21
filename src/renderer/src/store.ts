@@ -46,6 +46,7 @@ export type DialogState =
   | { type: 'tools' }
   | { type: 'shortcuts' }
   | { type: 'review-tags' }
+  | { type: 'tidy-tags' }
   | { type: 'confirm'; title: string; message: string; confirmLabel: string; danger?: boolean }
   | { type: 'prompt'; title: string; label: string; initial: string; confirmLabel: string; placeholder?: string }
 
@@ -122,11 +123,13 @@ interface Store {
 
   /** Puts the browser bookmarklet on the clipboard (offering to turn the local API on first). */
   copyBookmarklet(): Promise<void>
+  /** Puts back what a "Tidy tags" run changed. */
+  undoTidy(id: number): Promise<void>
   resetApiKey(): Promise<void>
   onCapture(event: CaptureEvent): void
 
   openAdd(urls?: string[]): void
-  openDialog(dialog: Extract<DialogState, { type: 'settings' | 'tools' | 'shortcuts' | 'review-tags' }>): void
+  openDialog(dialog: Extract<DialogState, { type: 'settings' | 'tools' | 'shortcuts' | 'review-tags' | 'tidy-tags' }>): void
   closeDialog(result?: unknown): void
   confirm(options: { title: string; message: string; confirmLabel: string; danger?: boolean }): Promise<boolean>
   prompt(options: { title: string; label: string; initial?: string; confirmLabel: string; placeholder?: string }): Promise<string | null>
@@ -604,6 +607,13 @@ export const useStore = create<Store>((set, get) => {
         return
       }
       get().toast('Bookmarklet copied. In your browser, add a new bookmark and paste this as its address (URL).', 'success')
+    },
+
+    async undoTidy(id) {
+      const result = await guard(() => api.tagging.tidy.undo(id))
+      if (!result) return
+      get().toast('Tidy undone: the tags are back as they were.', 'success')
+      await get().refreshAll()
     },
 
     async resetApiKey() {

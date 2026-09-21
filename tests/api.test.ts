@@ -262,9 +262,12 @@ describe('ingesting a URL', () => {
 
   it('uses the local model when it is set up, and says so when it cannot', async () => {
     const working = makeIngest('suggest', { llmOn: true, llm: new FakeLlm(() => ['zebras']) })
-    const a = working.ingest.capture(req('https://example.org/x', { title: 'Notes on zebras' }))
-    await a.done
-    expect(working.repo.proposalItems('zebras')).toHaveLength(1)
+    const first = working.ingest.capture(req('https://example.org/x', { title: 'Notes on zebras' }))
+    await first.done
+    expect(working.repo.proposalItems('zebras')).toHaveLength(0) // a brand-new tag only the model thought of waits for a second bookmark
+    expect(working.repo.heldBookmarkIds('zebras')).toEqual([first.bookmark.id])
+    await working.ingest.capture(req('https://example.org/y', { title: 'More on zebras' })).done
+    expect(working.repo.proposalItems('zebras')).toHaveLength(2) // now both are offered for review
 
     const broken = makeIngest('suggest', { llmOn: true, llm: new FakeLlm(() => new Error('Ollama did not answer in time.')) })
     const b = broken.ingest.capture(req('https://github.com/org/repo'))

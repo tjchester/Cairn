@@ -71,6 +71,12 @@ const api: CairnApi = {
       status: (overrides) => invoke('tagging:ollama:status', overrides),
       progress: () => invoke('tagging:ollama:progress')
     },
+    tidy: {
+      plan: (rareMaxUses) => invoke('tagging:tidy:plan', rareMaxUses),
+      apply: (request) => invoke('tagging:tidy:apply', request),
+      last: () => invoke('tagging:tidy:last'),
+      undo: (id) => invoke('tagging:tidy:undo', id)
+    },
     runs: {
       last: () => invoke('tagging:runs:last'),
       undo: (runId) => invoke('tagging:runs:undo', runId),

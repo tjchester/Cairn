@@ -203,7 +203,7 @@ export class IngestService {
           if (suggestions.length > 0) {
             // Each capture gets its own run, kept apart from bulk runs ("Undo last run" is about those).
             const runId = repo.createRun('capture', mode)
-            const result = tagging.deliver(id, suggestions, mode, runId)
+            const result = tagging.deliver(id, suggestions, mode, runId, context)
             repo.finishRun(runId, mode === 'auto' ? result.added : 0, result.added > 0 ? 1 : 0)
           }
         }

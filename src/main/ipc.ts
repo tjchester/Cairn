@@ -12,6 +12,7 @@ import type { JobRunner } from './services/jobs'
 import { fetchMetadata } from './services/metadata'
 import { refreshBookmarkMetadata } from './services/refresh'
 import type { TaggingService } from './tagging/service'
+import { buildTidyPlan } from './tagging/tidy'
 import { showLegalDocs } from './window'
 
 const MAX_IMPORT_BYTES = 100 * 1024 * 1024
@@ -96,6 +97,13 @@ const taggingTarget = z.union([
     })
   })
 ])
+
+const tidyRequest = z.object({
+  merges: z.array(z.object({ keep: text(200), from: z.array(text(200)).max(200) })).max(20_000),
+  remove: z.array(text(200)).max(50_000),
+  rareMaxUses: z.number().int().min(1).max(50),
+  keepOnlyTag: z.boolean()
+})
 
 const noArgs = z.tuple([])
 
@@ -257,6 +265,10 @@ export function registerIpc(ctx: IpcContext): void {
   handle('tagging:runs:last', noArgs, () => repo.lastRun())
   handle('tagging:runs:undo', z.tuple([id]), ([runId]) => repo.undoRun(runId))
   handle('tagging:runs:removeAuto', noArgs, () => repo.removeAutoTags())
+  handle('tagging:tidy:plan', z.tuple([z.number().int().min(1).max(50)]), ([rareMaxUses]) => buildTidyPlan(repo.tagStats(), repo.tagsByBookmark(), rareMaxUses))
+  handle('tagging:tidy:apply', z.tuple([tidyRequest]), ([request]) => repo.applyTidy(request))
+  handle('tagging:tidy:last', noArgs, () => repo.lastTidy())
+  handle('tagging:tidy:undo', z.tuple([id]), ([tidyId]) => repo.undoTidy(tidyId))
 
   // app
   handle('app:version', noArgs, () => app.getVersion())

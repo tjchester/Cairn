@@ -375,9 +375,10 @@ export class JobRunner {
           suggestions = tagging.suggestForCandidate(candidate, context)
         }
         if (suggestions.length > 0) {
-          const result = tagging.deliver(candidate.id, suggestions, mode, runId)
+          const result = tagging.deliver(candidate.id, suggestions, mode, runId, context)
+          touched += result.promoted // bookmarks that were waiting for this tag and got it now
           if (result.added + result.proposed > 0) {
-            touched++
+            if (result.added + result.proposed > result.promoted) touched++
             tags += result.added + result.proposed
           }
         }
@@ -396,8 +397,10 @@ export class JobRunner {
             ? plural(tags, 'tag') + ' added to ' + plural(touched, 'bookmark') + '. You can undo this run in Tools.'
             : plural(tags, 'tag') + ' suggested for ' + plural(touched, 'bookmark') + '. Review them in Tools.'
       const model = modelFailures > 0 ? ' The local model failed for ' + plural(modelFailures, 'bookmark') + ' (built-in suggestions were used for those).' : ''
+      const stillHeld = this.repo.heldCount()
+      const heldNote = stillHeld > 0 ? ' ' + plural(stillHeld, 'new tag idea') + ' from the model ' + (stillHeld === 1 ? 'is' : 'are') + ' held back until a second bookmark wants the same tag.' : ''
       const skipped = modelSkipped > 0 ? ' ' + plural(modelSkipped, 'page') + ' looked like an attempt to instruct the model, so only built-in suggestions were used for them.' : ''
-      finish(outcome + model + skipped)
+      finish(outcome + model + skipped + heldNote)
     }
   }
 
@@ -437,7 +440,7 @@ export class JobRunner {
       const suggestions = tagging.suggestForCandidate(candidate, tagContext)
       if (suggestions.length === 0) return
       tagRun ??= this.repo.createRun('fetch', taggingMode)
-      const result = tagging.deliver(bookmarkId, suggestions, taggingMode, tagRun)
+      const result = tagging.deliver(bookmarkId, suggestions, taggingMode, tagRun, tagContext)
       if (result.added + result.proposed > 0) {
         tagged += result.added + result.proposed
         taggedBookmarks++

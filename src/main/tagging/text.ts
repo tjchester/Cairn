@@ -27,6 +27,18 @@ export const WORKFLOW_TAGS = new Set(
 /** Words that end in "s" but are not plurals, so must not be trimmed when comparing tags. */
 const NO_SINGULAR = new Set(['news', 'series', 'species', 'status', 'analysis', 'bias', 'canvas', 'gas', 'lens', 'physics', 'mathematics', 'politics', 'economics', 'ios', 'macos', 'tls', 'https', 'atlas', 'chaos', 'cosmos', 'kudos'])
 
+/**
+ * Words that say almost nothing as a tag. The local model likes to invent them ("system", "service", "client");
+ * they are not accepted as NEW tags from it (ones you already have are left alone).
+ */
+export const GENERIC_TAGS = new Set(
+  (
+    'system systems service services client clients project projects template templates item items content information info ' +
+    'general various miscellaneous stuff thing things resource resources example examples category categories topic topics ' +
+    'index talk form forms standard standards gem gems'
+  ).split(' ')
+)
+
 /** Splits text into lower-cased word tokens, keeping things like c++, c#, node.js and machine-learning whole. */
 export function tokenize(text: string): string[] {
   const out: string[] = []
@@ -47,6 +59,27 @@ export function canon(text: string): string {
   if (s.length > 3 && !NO_SINGULAR.has(s)) {
     if (s.endsWith('ies')) s = s.slice(0, -3) + 'y'
     else if (s.endsWith('s') && !s.endsWith('ss') && !s.endsWith('us') && !s.endsWith('is')) s = s.slice(0, -1)
+  }
+  return s
+}
+
+/** -ing words that are subjects in their own right ("accounting" is not "account"), so they are never folded. */
+const NO_FOLD = new Set(['accounting', 'engineering', 'marketing', 'publishing', 'banking', 'trading', 'shopping', 'printing', 'programming', 'painting', 'training', 'housing', 'plumbing'])
+
+/**
+ * A looser form than canon() for spotting look-alike tags: "ad-blocker", "ad-blockers", "ad-blocking" and "adblock"
+ * all become "adblock", and "debugging" / "debugger" both become "debug". Only -ing and -er endings are folded, and only
+ * when a stem of at least five letters is left, so short words ("string", "server", "router") are never mangled.
+ */
+export function variantKey(text: string): string {
+  const s = canon(text)
+  if (NO_FOLD.has(s)) return s
+  for (const suffix of ['ing', 'er']) {
+    if (!s.endsWith(suffix)) continue
+    let stem = s.slice(0, -suffix.length)
+    if (stem.length < 5) continue
+    if (/([^aeioulsy])\1$/.test(stem)) stem = stem.slice(0, -1) // "debugg" -> "debug", "programm" -> "program"
+    return stem
   }
   return s
 }
