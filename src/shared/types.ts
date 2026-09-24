@@ -345,8 +345,8 @@ export type SettingsPatch = Partial<Omit<Settings, 'tagging' | 'api'>> & {
 export const DEFAULT_SETTINGS: Settings = {
   theme: 'system',
   view: 'list',
-  sort: 'created',
-  direction: 'desc',
+  sort: 'title',
+  direction: 'asc',
   sidebarWidth: 260,
   collectionsOpen: true,
   tagsOpen: true,

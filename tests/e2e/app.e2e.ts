@@ -89,6 +89,10 @@ describe('Cairn (real app)', () => {
     await page.waitForSelector('.bm')
 
     await expect(rows()).toHaveCount(4)
+    // A fresh library is sorted by title, A-Z.
+    await expect(page.getByLabel('Sort by')).toHaveValue('title')
+    await expect(page.getByLabel('Sort ascending')).toBeVisible()
+    expect(await rows().locator('.bm-title').allInnerTexts()).toEqual(['Best pasta recipe', 'Hacker News', 'MDN Web Docs', 'Rust Programming Language'])
     await expect(page.locator('.sidebar')).toContainText('Dev')
     await expect(page.locator('.sidebar')).toContainText('Recipes')
     // Parent collection count includes its child.

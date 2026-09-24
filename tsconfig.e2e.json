@@ -10,7 +10,9 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "noEmit": true,
-    "types": ["node"]
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": { "@shared/*": ["src/shared/*"] }
   },
   "include": ["tests/e2e/**/*", "src/shared/**/*", "src/renderer/src/global.d.ts"]
 }
