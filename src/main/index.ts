@@ -10,7 +10,7 @@ import { applyTheme, readSettings, registerIpc } from './ipc'
 import { buildMenu, focusedOrFirstWindow } from './menu'
 import { JobRunner } from './services/jobs'
 import { createFileLogger } from './services/logger'
-import { useNetworkStack } from './services/metadata'
+import { ORIGINAL_STATUS_HEADER, useNetworkStack } from './services/metadata'
 import { TaggingService } from './tagging/service'
 import { createMainWindow, isTrustedUrl, showLegalDocs } from './window'
 
@@ -21,7 +21,20 @@ if (dataOverride) {
   app.setPath('userData', dataOverride)
 }
 
-process.on('unhandledRejection', (reason) => console.error('Unhandled rejection:', reason))
+/** Set once the log file is known, so a crash in the background is recorded where Help can show it. */
+let logProblem: ((event: string, data: Record<string, unknown>) => void) | null = null
+
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection:', reason)
+  logProblem?.('unhandled-rejection', { message: reason instanceof Error ? reason.message : String(reason) })
+})
+
+// Something failing deep inside a library (the network stack meeting an odd reply, say) should not throw a dialog at
+// you in the middle of a run: it is written down, and the app carries on.
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception:', error)
+  logProblem?.('uncaught-exception', { message: error instanceof Error ? error.message : String(error) })
+})
 
 if (!app.requestSingleInstanceLock()) {
   app.quit()
@@ -45,6 +58,17 @@ if (!app.requestSingleInstanceLock()) {
     // as an HTTP 403 and reads like a dead link. The session is its own and is not written to disk, so cookies those
     // pages set are forgotten when the app closes.
     const pageSession = session.fromPartition('cairn-fetch')
+    // A reply may only carry a status from 200 to 599. Some sites answer what they take for a bot with 999 (LinkedIn
+    // does), and building a reply with that throws deep inside the network stack: the app showed a JavaScript error
+    // and the request never finished. Bring such a status into range here, keeping the real number in a header.
+    pageSession.webRequest.onHeadersReceived((details, callback) => {
+      const code = Number(/^\S+\s+(\d+)/.exec(details.statusLine ?? '')?.[1] ?? 0)
+      if (code >= 200 && code <= 599) return callback({})
+      callback({
+        statusLine: 'HTTP/1.1 599 Unusual Status',
+        responseHeaders: { ...details.responseHeaders, [ORIGINAL_STATUS_HEADER]: [String(code)] }
+      })
+    })
     useNetworkStack((input, init) => pageSession.fetch(String(input), init))
 
     const repo = new Repo(openDatabase(join(app.getPath('userData'), 'cairn.db')))
@@ -59,6 +83,7 @@ if (!app.requestSingleInstanceLock()) {
     const logFile = join(app.getPath('userData'), 'connection.log')
     const tagging = new TaggingService(repo, () => readSettings(repo).tagging)
     const log = createFileLogger(logFile)
+    logProblem = log
     const jobs = new JobRunner(repo, (progress: JobProgress) => sendToWindow('job:progress', progress), {
       log,
       tagging

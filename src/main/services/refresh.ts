@@ -4,8 +4,11 @@ import { fetchMetadata, isRateLimitStatus, type MetadataResult } from './metadat
 import { describeNetworkError } from './net'
 
 /** Explains an error status in terms the user can act on. */
+const REFUSED = new Set([401, 403, 405, 406, 451, 999])
+
 function describeStatus(status: number): string {
   if (isRateLimitStatus(status)) return 'The site is limiting requests right now (HTTP ' + status + '). Try again in a little while.'
+  if (REFUSED.has(status)) return 'The site would not let the app read this page (HTTP ' + status + '), though the link itself is fine: opening it in your browser still works.'
   if (status === 404 || status === 410) return 'The page no longer exists (HTTP ' + status + '), so there is nothing to fetch.'
   if (status >= 500) return 'The site reported a server error (HTTP ' + status + '). This is often temporary, so try again in a little while.'
   return 'The page answered with HTTP ' + status + ', so there is nothing to fetch.'

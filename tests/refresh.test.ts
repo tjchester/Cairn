@@ -29,6 +29,17 @@ describe('refreshBookmarkMetadata (the single-bookmark Refresh button)', () => {
     expect(updated).toMatchObject({ title: 'My own title', excerpt: 'My own words', coverUrl: 'https://cdn.example/cover.png' })
   })
 
+  it('says a page the site refuses to show is not a broken link', async () => {
+    const repo = makeRepo()
+    const b = repo.createBookmark({ url: 'https://www.linkedin.com/in/someone', title: 'A profile' })
+    for (const status of [403, 999]) {
+      await expect(refreshBookmarkMetadata(repo, b.id, async () => meta({ status }))).rejects.toThrow(
+        new RegExp('would not let the app read this page \\(HTTP ' + status + '\\).*browser still works')
+      )
+    }
+    expect(repo.getBookmark(b.id)).toMatchObject({ title: 'A profile', status: 'unknown' }) // nothing was changed
+  })
+
   it.each([
     [404, /no longer exists/],
     [410, /no longer exists/],

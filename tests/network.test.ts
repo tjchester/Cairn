@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { runPool } from '../src/main/services/jobs'
-import { attemptLink, classifyHttpStatus, fetchMetadata, parseMetadata, probeConnectivity, type ProbeResult } from '../src/main/services/metadata'
+import { attemptLink, isTransientStatus, ORIGINAL_STATUS_HEADER, statusOf, classifyHttpStatus, fetchMetadata, parseMetadata, probeConnectivity, type ProbeResult } from '../src/main/services/metadata'
 
 const PAGE = `<!doctype html><html><head>
 <meta charset="utf-8">
@@ -114,6 +114,34 @@ describe('fetchMetadata', () => {
   })
 })
 
+describe('a status outside 200-599 (LinkedIn answers 999)', () => {
+  // A reply may only carry 200 to 599, so the main process brings an odd status into range as it arrives and puts the
+  // real number in a header. Everything downstream reads that header, so the site's own number is what is reported.
+  const odd = (code: number, body: string | null = null) =>
+    new Response(body, { status: 599, headers: { [ORIGINAL_STATUS_HEADER]: String(code), 'content-type': 'text/html' } })
+
+  it('reads the real status back', () => {
+    expect(statusOf(odd(999))).toBe(999)
+    expect(statusOf(new Response(null, { status: 404 }))).toBe(404)
+    expect(statusOf(new Response(null, { status: 200, headers: { [ORIGINAL_STATUS_HEADER]: 'nonsense' } }))).toBe(200)
+  })
+
+  it('is what a page lookup reports, and it reads nothing from the page', async () => {
+    const fetchImpl = (async () => odd(999, '<title>Denied</title>')) as typeof fetch
+    const result = await fetchMetadata('https://www.linkedin.com/in/someone', { fetchImpl })
+    expect(result.status).toBe(999)
+    expect(result.title).toBe('')
+  })
+
+  it('does not condemn the link when checking it', async () => {
+    const fetchImpl = (async () => odd(999)) as typeof fetch
+    expect(await attemptLink('https://www.linkedin.com/in/someone', { fetchImpl })).toEqual({
+      kind: 'final',
+      result: { status: 'ok', httpStatus: 999 } // the page is there, it just will not show itself to a program
+    })
+  })
+})
+
 describe('attemptLink', () => {
   const respond = (script: Record<string, { status: number; headers?: Record<string, string> }>) => {
     const methods: string[] = []
@@ -173,6 +201,13 @@ describe('attemptLink', () => {
 })
 
 describe('classifyHttpStatus', () => {
+  it('leaves made-up statuses above 599 out of the retry loop', () => {
+    expect(isTransientStatus(503)).toBe(true)
+    expect(isTransientStatus(599)).toBe(true)
+    expect(isTransientStatus(999)).toBe(false) // trying again will not change the site's mind
+    expect(classifyHttpStatus(999)).toBe('ok')
+  })
+
   it('classifies final statuses', () => {
     expect(classifyHttpStatus(200)).toBe('ok')
     expect(classifyHttpStatus(301)).toBe('ok')

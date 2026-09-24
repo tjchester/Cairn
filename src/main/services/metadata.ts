@@ -27,6 +27,19 @@ export function useNetworkStack(fn: FetchLike): void {
 
 const appFetch = (): FetchLike => networkFetch ?? fetch
 
+/**
+ * A reply may only carry a status between 200 and 599, and building one outside that range throws inside the network
+ * stack (the request then never finishes). Some sites answer bots with 999 — LinkedIn is the well-known one — so the
+ * main process brings such a status into range as it arrives and puts the real number in this header.
+ */
+export const ORIGINAL_STATUS_HEADER = 'x-cairn-original-status'
+
+/** The status the site really sent. */
+export function statusOf(res: { status: number; headers: { get(name: string): string | null } }): number {
+  const original = Number(res.headers.get(ORIGINAL_STATUS_HEADER))
+  return Number.isInteger(original) && original > 0 ? original : res.status
+}
+
 const clean = (value: string | undefined | null, max: number): string =>
   (value ?? '').replace(/\s+/g, ' ').trim().slice(0, max)
 
@@ -229,9 +242,10 @@ export async function fetchMetadata(url: string, options: FetchOptions = {}): Pr
   const contentType = res.headers.get('content-type') ?? ''
   const fallbackIcon = new URL('/favicon.ico', finalUrl).href
   const retryAfterMs = parseRetryAfter(res.headers.get('retry-after'))
-  const base = { finalUrl, status: res.status, retryAfterMs }
+  const status = statusOf(res)
+  const base = { finalUrl, status, retryAfterMs }
 
-  if (res.status >= 400) {
+  if (status >= 400) {
     await res.body?.cancel().catch(() => undefined)
     return { title: '', excerpt: '', coverUrl: null, faviconUrl: fallbackIcon, ...base }
   }
@@ -271,7 +285,9 @@ const RESTRICTED = new Set([401, 403, 405, 406, 451, 999])
 
 /** 429 and 503 are explicit "slow down" signals; other 5xx are usually temporary faults. */
 export const isRateLimitStatus = (code: number): boolean => code === 429 || code === 503
-export const isTransientStatus = (code: number): boolean => code === 429 || code >= 500
+// Only real server errors are worth trying again: a made-up status above 599 (LinkedIn's 999) means "not for bots",
+// which no amount of retrying will change.
+export const isTransientStatus = (code: number): boolean => code === 429 || (code >= 500 && code < 600)
 
 /** Classifies a *final* HTTP status (transient ones are handled before this is reached). */
 export function classifyHttpStatus(code: number): LinkStatus {
@@ -285,7 +301,7 @@ export async function attemptLink(url: string, options: FetchOptions = {}): Prom
   const send = async (method: 'HEAD' | 'GET'): Promise<{ code: number; retryAfterMs: number | null }> => {
     const res = await doFetch(url, requestInit(method, timeout))
     await res.body?.cancel().catch(() => undefined)
-    return { code: res.status, retryAfterMs: parseRetryAfter(res.headers.get('retry-after')) }
+    return { code: statusOf(res), retryAfterMs: parseRetryAfter(res.headers.get('retry-after')) }
   }
   try {
     let answer = await send('HEAD')

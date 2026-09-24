@@ -817,6 +817,47 @@ describe('Cairn (real app)', () => {
     await page.waitForSelector('.bm')
   })
 
+  it('survives a site that answers with a status no reply may carry (LinkedIn answers 999)', async () => {
+    const site = createServer((req, res) => {
+      const code = Number((req.url ?? '/').slice(1)) || 999
+      res.writeHead(code, { 'content-type': 'text/html' })
+      res.end('<title>Denied</title>')
+    })
+    await new Promise<void>((resolve) => site.listen(0, '127.0.0.1', resolve))
+    const base = 'http://127.0.0.1:' + (site.address() as AddressInfo).port
+
+    try {
+      const id = await cairn(async (api) => (await api.bookmarks.create({ url: 'http://127.0.0.1:0/999', title: 'Refuses robots' })).id)
+      // (the address is rewritten below, because the port is only known once the server is listening)
+      await page.evaluate(async ({ bookmarkId, url }) => window.cairn.bookmarks.update(bookmarkId, { url }), { bookmarkId: id, url: base + '/999' })
+
+      const outcome = await page.evaluate(async (bookmarkId) => {
+        try {
+          await window.cairn.bookmarks.refreshMetadata(bookmarkId)
+          return 'no error'
+        } catch (error) {
+          return String(error instanceof Error ? error.message : error)
+        }
+      }, id)
+      expect(outcome).toMatch(/would not let the app read this page \(HTTP 999\)/)
+      expect(outcome).toMatch(/browser still works/)
+
+      // The app is still running and still working: nothing crashed, and an ordinary page still reads fine.
+      await expect(page.locator('.bm-list')).toBeVisible()
+      const ok = await page.evaluate(async (url) => (await window.cairn.metadata.fetch(url)).status, base + '/200')
+      expect(ok).toBe(200)
+    } finally {
+      site.closeAllConnections()
+      site.close()
+      await cairn(async (api) => {
+        const found = await api.bookmarks.query({ scope: { kind: 'all' }, search: 'Refuses robots', sort: 'title', direction: 'asc', limit: 5, offset: 0 })
+        const ids = found.items.map((b) => b.id)
+        await api.bookmarks.trash(ids)
+        await api.bookmarks.purge(ids)
+      })
+    }
+  })
+
   it('has no renderer errors or CSP violations', () => {
     expect(problems).toEqual([])
   })
