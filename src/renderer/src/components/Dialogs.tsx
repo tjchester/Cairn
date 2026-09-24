@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { ApiStatus, Bookmark, JobKind, LlmSettings, OllamaStatus, StartJobOptions, TagRunInfo, TaggingMode, ThemeSetting, TidyLogInfo } from '@shared/types'
 import { Icon } from '../icons'
 import { useStore } from '../store'
-import { formatDate } from '../util'
+import { errorMessage, formatDate } from '../util'
 import { Favicon, Modal } from './ui'
 
 const api = window.cairn
@@ -617,11 +617,62 @@ function Duplicates(): React.JSX.Element {
   )
 }
 
+/** Removes collections that hold no bookmarks at all, anywhere below them. */
+function TidyCollections(): React.JSX.Element {
+  const s = useStore()
+  const [busy, setBusy] = useState(false)
+
+  const tidy = async (): Promise<void> => {
+    setBusy(true)
+    try {
+      const empty = await api.tools.emptyCollections()
+      if (empty.length === 0) {
+        s.toast('Every collection has bookmarks in it.', 'info')
+        return
+      }
+      const shown = empty.slice(0, 12).map((c) => '• ' + c.path)
+      const rest = empty.length - shown.length
+      const yes = await s.confirm({
+        title: empty.length === 1 ? 'Remove this empty collection?' : 'Remove ' + empty.length + ' empty collections?',
+        message: [shown.join('\n') + (rest > 0 ? '\n…and ' + rest + ' more' : ''), 'No bookmarks are affected, but this cannot be undone.'].join('\n\n'),
+        confirmLabel: empty.length === 1 ? 'Remove it' : 'Remove them',
+        danger: true
+      })
+      if (!yes) return
+      const removed = await api.tools.removeEmptyCollections(empty.map((c) => c.id))
+      s.toast(removed === 0 ? 'Nothing needed removing.' : removed + (removed === 1 ? ' empty collection removed' : ' empty collections removed'), 'success')
+      await s.refreshAll()
+    } catch (error) {
+      s.toast(errorMessage(error), 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="settings-section">
+      <h3>
+        <Icon name="deleteFolder" /> Tidy collections
+      </h3>
+      <p className="muted">
+        Removes collections that hold no bookmarks, including the sub-collections below them. A collection whose bookmarks are all in the Trash is kept, so they can still be
+        restored into it.
+      </p>
+      <div className="button-row">
+        <button className="btn" disabled={busy} onClick={() => void tidy()}>
+          <Icon name="deleteFolder" /> {busy ? 'Looking…' : 'Tidy collections…'}
+        </button>
+      </div>
+    </section>
+  )
+}
+
 export function ToolsDialog(): React.JSX.Element {
   const s = useStore()
   return (
     <Modal title="Duplicates & broken links" onClose={() => s.closeDialog()} width={640}>
       <Duplicates />
+      <TidyCollections />
       <JobPanel
         kind="check-links"
         title="Check for broken links"

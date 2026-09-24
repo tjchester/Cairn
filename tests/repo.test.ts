@@ -143,6 +143,87 @@ describe('collections', () => {
   })
 })
 
+describe('tidying empty collections', () => {
+  /** Dev > Rust > Old (all empty), Dev > Used (has a bookmark), Recipes (empty), Binned (its bookmark is in the Trash). */
+  function library() {
+    const repo = makeRepo()
+    const dev = repo.createCollection({ name: 'Dev' })
+    const rust = repo.createCollection({ name: 'Rust', parentId: dev.id })
+    const old = repo.createCollection({ name: 'Old', parentId: rust.id })
+    const used = repo.createCollection({ name: 'Used', parentId: dev.id })
+    const recipes = repo.createCollection({ name: 'Recipes' })
+    const binned = repo.createCollection({ name: 'Binned' })
+    repo.createBookmark({ url: 'https://keep.example/', collectionId: used.id })
+    const trashed = repo.createBookmark({ url: 'https://gone.example/', collectionId: binned.id })
+    repo.trash([trashed.id])
+    return { repo, dev, rust, old, used, recipes, binned, trashed }
+  }
+
+  it('finds the collections with no bookmarks below them, deepest first, and leaves the rest alone', () => {
+    const { repo, rust, old, recipes } = library()
+    const empty = repo.emptyCollections()
+    expect(empty.map((c) => c.path)).toEqual(['Dev / Rust / Old', 'Dev / Rust', 'Recipes'])
+    expect(empty.map((c) => c.id)).toEqual([old.id, rust.id, recipes.id])
+    expect(empty[0]).toMatchObject({ name: 'Old' })
+  })
+
+  it('keeps a collection whose bookmarks are only in the Trash, so they can still be restored into it', () => {
+    const { repo, binned, trashed } = library()
+    expect(repo.emptyCollections().map((c) => c.name)).not.toContain('Binned')
+
+    repo.purge([trashed.id])
+    expect(repo.emptyCollections().map((c) => c.name)).toContain('Binned')
+  })
+
+  it('removes a whole empty branch in one go and keeps everything else', () => {
+    const { repo, dev, rust, old, used, recipes, binned } = library()
+    const before = repo.counts().all
+    const result = repo.removeEmptyCollections(repo.emptyCollections().map((c) => c.id))
+
+    expect(result.removed).toBe(3) // Old, Rust and Recipes
+    expect(repo.listCollections().map((c) => c.name).sort()).toEqual(['Binned', 'Dev', 'Used'])
+    expect(repo.getCollection(rust.id)).toBeNull()
+    expect(repo.getCollection(old.id)).toBeNull()
+    expect(repo.getCollection(dev.id)).not.toBeNull() // it still holds "Used"
+    expect(repo.getBookmark(repo.query(q({ scope: { kind: 'collection', id: used.id } })).items[0]?.id ?? 0)?.collectionId).toBe(used.id)
+    expect(repo.counts().all).toBe(before)
+    expect([recipes.id, binned.id].map((id) => repo.getCollection(id) === null)).toEqual([true, false])
+  })
+
+  it('removes a parent and its empty children with a single delete, counting them all', () => {
+    const repo = makeRepo()
+    const a = repo.createCollection({ name: 'A' })
+    const b = repo.createCollection({ name: 'B', parentId: a.id })
+    repo.createCollection({ name: 'C', parentId: b.id })
+    expect(repo.removeEmptyCollections([a.id]).removed).toBe(3) // the children go with it
+    expect(repo.listCollections()).toEqual([])
+  })
+
+  it('refuses anything that is not empty, whatever it is asked to remove', () => {
+    const { repo, dev, used, binned } = library()
+    expect(repo.removeEmptyCollections([dev.id, used.id, binned.id, 9999]).removed).toBe(0)
+    expect(repo.listCollections().map((c) => c.name).sort()).toEqual(['Binned', 'Dev', 'Old', 'Recipes', 'Rust', 'Used'])
+  })
+
+  it('checks again at the moment it removes, so a bookmark added meanwhile keeps its collection', () => {
+    const { repo, recipes, rust, old } = library()
+    const stale = repo.emptyCollections().map((c) => c.id)
+    repo.createBookmark({ url: 'https://late.example/', collectionId: recipes.id })
+
+    expect(repo.removeEmptyCollections(stale).removed).toBe(2) // Old and Rust
+    expect(repo.getCollection(recipes.id)).not.toBeNull()
+    expect(repo.getCollection(rust.id)).toBeNull()
+    expect(repo.getCollection(old.id)).toBeNull()
+  })
+
+  it('says there is nothing to do for a library with no collections', () => {
+    const repo = makeRepo()
+    repo.createBookmark({ url: 'https://a.example/' })
+    expect(repo.emptyCollections()).toEqual([])
+    expect(repo.removeEmptyCollections([]).removed).toBe(0)
+  })
+})
+
 describe('tags', () => {
   it('lists counts, renames, merges and removes', () => {
     const repo = makeRepo()

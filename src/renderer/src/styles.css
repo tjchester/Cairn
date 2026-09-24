@@ -1013,6 +1013,7 @@ input[aria-invalid='true'] {
 }
 .dialog-message {
   line-height: 1.5;
+  white-space: pre-line; /* the message may list things, one per line */
 }
 .preview {
   display: flex;

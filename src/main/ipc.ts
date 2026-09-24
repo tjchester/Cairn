@@ -193,6 +193,8 @@ export function registerIpc(ctx: IpcContext): void {
   // metadata + tools
   handle('metadata:fetch', z.tuple([text(4096)]), ([url]) => fetchMetadata(url))
   handle('tools:findDuplicates', noArgs, () => repo.findDuplicateGroups())
+  handle('tools:emptyCollections', noArgs, () => repo.emptyCollections())
+  handle('tools:removeEmptyCollections', z.tuple([ids]), ([collectionIds]) => repo.removeEmptyCollections(collectionIds).removed)
   handle('tools:startJob', z.tuple([z.enum(['check-links', 'fetch-metadata', 'auto-tag']), startJobOptions.optional()]), ([kind, options]) => jobs.start(kind, options ?? {}))
   handle('tools:cancelJob', z.tuple([text(100)]), ([jobId]) => jobs.cancel(jobId))
 

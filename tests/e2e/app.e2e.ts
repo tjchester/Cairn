@@ -759,6 +759,51 @@ describe('Cairn (real app)', () => {
     await expect(page.locator('.nav-section.tags')).toBeVisible()
   })
 
+  it('tidies away empty collections from Tools, keeping the ones that hold bookmarks', async () => {
+    await cairn(async (api) => {
+      const outer = await api.collections.create({ name: 'Empty outer' })
+      const inner = await api.collections.create({ name: 'Empty inner', parentId: outer.id })
+      await api.collections.create({ name: 'Empty deepest', parentId: inner.id })
+      const keeps = await api.collections.create({ name: 'Has one' })
+      await api.bookmarks.create({ url: 'https://kept.example/', title: 'Kept bookmark', collectionId: keeps.id })
+      return true
+    })
+    await page.reload()
+    await page.waitForSelector('.bm')
+    const before = await cairn((api) => api.collections.list())
+    // Earlier tests leave empty collections behind as well, so check exactly those go and nothing else.
+    const empty = await cairn((api) => api.tools.emptyCollections())
+    expect(empty.map((c) => c.path)).toContain('Empty outer / Empty inner / Empty deepest')
+
+    await page.getByRole('button', { name: 'Tools' }).click()
+    await page.getByRole('dialog', { name: 'Duplicates & broken links' }).getByRole('button', { name: /Tidy collections/ }).click()
+    const confirm = page.getByRole('dialog', { name: /Remove \d+ empty collections\?/ })
+    await expect(confirm).toContainText('Empty outer / Empty inner / Empty deepest')
+    await expect(confirm).toContainText('cannot be undone')
+    await expect(confirm).not.toContainText('Has one')
+    await shot('24-tidy-collections')
+    await confirm.getByRole('button', { name: 'Remove them' }).click()
+    await expect(page.getByText(/empty collections removed/).last()).toBeVisible()
+
+    const after = await cairn((api) => api.collections.list())
+    const names = after.map((c) => c.name)
+    expect(names).not.toContain('Empty outer')
+    expect(names).not.toContain('Empty inner')
+    expect(names).not.toContain('Empty deepest')
+    expect(names).toContain('Has one')
+    expect(names).toContain('Dev') // still holds bookmarks
+    const removed = new Set(empty.map((c) => c.id))
+    expect(after.map((c) => c.id)).toEqual(before.map((c) => c.id).filter((id) => !removed.has(id)))
+    expect((await cairn((api) => api.data.counts())).all).toBeGreaterThan(0)
+    await expect(page.locator('.nav-section.tree')).not.toContainText('Empty outer')
+
+    // Nothing left to do the second time.
+    await page.getByRole('button', { name: 'Tools' }).click()
+    await page.getByRole('dialog', { name: 'Duplicates & broken links' }).getByRole('button', { name: /Tidy collections/ }).click()
+    await expect(page.getByText('Every collection has bookmarks in it.').last()).toBeVisible()
+    await page.keyboard.press('Escape')
+  })
+
   it('has no renderer errors or CSP violations', () => {
     expect(problems).toEqual([])
   })

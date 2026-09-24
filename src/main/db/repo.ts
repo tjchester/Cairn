@@ -8,6 +8,7 @@ import type {
   BulkPatch,
   Collection,
   Counts,
+  EmptyCollection,
   LinkStatus,
   PageSignals,
   ProposalGroup,
@@ -20,6 +21,7 @@ import type {
   TidyRequest,
   TidyResult
 } from '@shared/types'
+import { buildTree, subtreeCounts } from '@shared/collections'
 import { coerceUrl, domainOf, isHttpUrl, urlKey } from '@shared/url'
 import { canon, GENERIC_TAGS } from '../tagging/text'
 import { buildSearchClauses, parseSearch, type SqlValue } from './search'
@@ -310,6 +312,45 @@ export class Repo {
       }
       this.run('DELETE FROM collections WHERE id = ?', id) // sub-collections cascade
       return { trashed }
+    })
+  }
+
+  /**
+   * Collections holding no bookmarks at all, anywhere below them: what "Tidy collections" offers to remove.
+   * A bookmark in the Trash still counts as content, so a collection is not swept away while its bookmarks could
+   * still be restored into it. Deepest first, so a listing reads from the leaves up.
+   */
+  emptyCollections(): EmptyCollection[] {
+    const collections = this.listCollections()
+    const direct: Record<number, number> = {}
+    for (const row of this.all('SELECT collection_id AS id, COUNT(*) AS n FROM bookmarks WHERE collection_id IS NOT NULL GROUP BY collection_id')) {
+      direct[Number(row.id)] = Number(row.n)
+    }
+    const totals = subtreeCounts(buildTree(collections), direct)
+    return collections
+      .filter((c) => (totals.get(c.id) ?? 0) === 0)
+      .map((c) => {
+        const parts = this.collectionPath(c.id, collections)
+        return { id: c.id, name: c.name, path: parts.join(' / '), depth: parts.length }
+      })
+      .sort((a, b) => b.depth - a.depth || a.path.localeCompare(b.path))
+      .map(({ id, name, path }) => ({ id, name, path }))
+  }
+
+  /**
+   * Removes the given collections, but only those that are still empty (nothing was added while you looked at the
+   * list). Sub-collections go with their parent, so removing a whole empty branch takes one delete.
+   */
+  removeEmptyCollections(ids: number[]): { removed: number } {
+    return this.tx(() => {
+      const allowed = new Set(this.emptyCollections().map((c) => c.id))
+      let removed = 0
+      for (const id of ids) {
+        if (!allowed.has(id) || !this.getCollection(id)) continue // not empty any more, or already gone with its parent
+        removed += 1 + this.descendantIds(id).length
+        this.run('DELETE FROM collections WHERE id = ?', id) // sub-collections cascade
+      }
+      return { removed }
     })
   }
 

@@ -96,6 +96,14 @@ export interface Counts {
   byCollection: Record<number, number>
 }
 
+/** A collection with no bookmarks anywhere below it (what "Tidy collections" offers to remove). */
+export interface EmptyCollection {
+  id: number
+  name: string
+  /** Its place in the tree, e.g. "Dev / Rust / Old". */
+  path: string
+}
+
 export interface TagInfo {
   name: string
   count: number
@@ -424,6 +432,10 @@ export interface CairnApi {
   }
   tools: {
     findDuplicates(): Promise<Bookmark[][]>
+    /** Collections holding no bookmarks at all, deepest first. Nothing is changed. */
+    emptyCollections(): Promise<EmptyCollection[]>
+    /** Removes those of `ids` that are still empty (sub-collections go with them). Returns how many were removed. */
+    removeEmptyCollections(ids: number[]): Promise<number>
     startJob(kind: JobKind, options?: StartJobOptions): Promise<string | null>
     cancelJob(id: string): Promise<void>
   }
