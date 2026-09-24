@@ -4,6 +4,8 @@ import {
   backoffMs,
   classifyNetworkError,
   Connectivity,
+  describeNetworkError,
+  HARD_FAILURES,
   HostScheduler,
   interleaveByHost,
   MAX_RETRY_AFTER_MS,
@@ -55,6 +57,27 @@ describe('classifyNetworkError', () => {
     expect(classifyNetworkError(Object.assign(new Error('x'), { name: 'TimeoutError' }))).toBe('timeout')
     expect(classifyNetworkError(new Error('who knows'))).toBe('other')
     expect(classifyNetworkError(undefined)).toBe('other')
+  })
+
+  it("understands Chromium's wording, which the app's own network stack reports", () => {
+    // Electron reports failures as a net::ERR_... message with no code, e.g. what a dead host looks like.
+    const chromium = (message: string) => new Error(message)
+    expect(classifyNetworkError(chromium('net::ERR_NAME_NOT_RESOLVED'))).toBe('dns')
+    expect(classifyNetworkError(chromium('net::ERR_DNS_TIMED_OUT'))).toBe('dns-temporary')
+    expect(classifyNetworkError(chromium('net::ERR_CONNECTION_REFUSED'))).toBe('refused')
+    expect(classifyNetworkError(chromium('net::ERR_CONNECTION_TIMED_OUT'))).toBe('timeout')
+    expect(classifyNetworkError(chromium('net::ERR_CONNECTION_RESET'))).toBe('reset')
+    expect(classifyNetworkError(chromium('net::ERR_EMPTY_RESPONSE'))).toBe('reset')
+    expect(classifyNetworkError(chromium('net::ERR_INTERNET_DISCONNECTED'))).toBe('unreachable')
+    expect(classifyNetworkError(chromium('net::ERR_CERT_DATE_INVALID'))).toBe('tls')
+    expect(classifyNetworkError(chromium('net::ERR_SSL_PROTOCOL_ERROR'))).toBe('tls')
+    expect(classifyNetworkError(chromium('net::ERR_UNSAFE_PORT'))).toBe('other') // Chromium refuses some ports outright
+    expect(describeNetworkError(chromium('net::ERR_NAME_NOT_RESOLVED'))).toBe('dns (ERR_NAME_NOT_RESOLVED)')
+
+    // Only "dns" and "refused" ever condemn a link, so Chromium's wording must not widen that.
+    for (const message of ['net::ERR_CERT_DATE_INVALID', 'net::ERR_CONNECTION_TIMED_OUT', 'net::ERR_INTERNET_DISCONNECTED', 'net::ERR_BLOCKED_BY_CLIENT']) {
+      expect(HARD_FAILURES.has(classifyNetworkError(chromium(message))), message).toBe(false)
+    }
   })
 
   it('looks inside AggregateError (multiple addresses tried)', () => {

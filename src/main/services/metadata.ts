@@ -14,6 +14,19 @@ export interface FetchOptions {
   fetchImpl?: FetchLike
 }
 
+let networkFetch: FetchLike | null = null
+
+/**
+ * Sends page lookups through the app's own network stack instead of Node's. The main process hands in Chromium's
+ * (via Electron) at startup: sites behind bot protection answer it as they answer a browser, while Node's fetch is
+ * turned away with a challenge page (an HTTP 403 that looks like a dead link). Tests leave it unset.
+ */
+export function useNetworkStack(fn: FetchLike): void {
+  networkFetch = fn
+}
+
+const appFetch = (): FetchLike => networkFetch ?? fetch
+
 const clean = (value: string | undefined | null, max: number): string =>
   (value ?? '').replace(/\s+/g, ' ').trim().slice(0, max)
 
@@ -210,7 +223,7 @@ export interface MetadataResult extends PageMetadata {
 /** One attempt, no retries: callers that fetch in bulk add retrying and pacing on top (see jobs.ts). */
 export async function fetchMetadata(url: string, options: FetchOptions = {}): Promise<MetadataResult> {
   const target = coerceUrl(url)
-  const doFetch = options.fetchImpl ?? fetch
+  const doFetch = options.fetchImpl ?? appFetch()
   const res = await doFetch(target, requestInit('GET', options.timeoutMs ?? 12_000))
   const finalUrl = res.url || target
   const contentType = res.headers.get('content-type') ?? ''
@@ -267,7 +280,7 @@ export function classifyHttpStatus(code: number): LinkStatus {
 }
 
 export async function attemptLink(url: string, options: FetchOptions = {}): Promise<LinkAttempt> {
-  const doFetch = options.fetchImpl ?? fetch
+  const doFetch = options.fetchImpl ?? appFetch()
   const timeout = options.timeoutMs ?? 10_000
   const send = async (method: 'HEAD' | 'GET'): Promise<{ code: number; retryAfterMs: number | null }> => {
     const res = await doFetch(url, requestInit(method, timeout))
@@ -312,7 +325,7 @@ export async function probeConnectivity(
   recentlyWorking: string[],
   options: FetchOptions & { signal?: AbortSignal; targets?: readonly string[]; onReport?: (results: ProbeResult[]) => void } = {}
 ): Promise<boolean> {
-  const doFetch = options.fetchImpl ?? fetch
+  const doFetch = options.fetchImpl ?? appFetch()
   const targets = [...recentlyWorking.slice(0, 2), ...(options.targets ?? PROBE_TARGETS)]
   const stop = new AbortController() // cancels the stragglers as soon as one target answers
   const signal = options.signal ? AbortSignal.any([stop.signal, options.signal]) : stop.signal

@@ -97,6 +97,9 @@ tests/                 unit tests + Playwright end-to-end test
   places at once and the first answer wins: the last couple of sites that answered, `https://www.gstatic.com/generate_204`
   (a tiny connectivity-check endpoint), and `https://1.1.1.1/` (contacted by IP address, so it works even when DNS is
   struggling). Change `PROBE_TARGETS` in `src/main/services/metadata.ts` if you prefer others.
+  Pages are fetched through Chromium's network stack (Electron's `net`), the one a browser uses, because sites behind bot
+  protection turn Node's own fetch away with a challenge page that arrives as an HTTP 403. Fetching uses a session of its own
+  that is never written to disk, so cookies those pages set are forgotten when the app closes.
 - **Diagnostics**: bulk jobs write `connection.log` in the data folder (open it with *Help → Show Connection Log*): rate
   limits, and, whenever the app decides you are offline, what it saw. Site names and error kinds only, never page content;
   it trims itself at 256 KB.

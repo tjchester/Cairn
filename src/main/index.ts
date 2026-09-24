@@ -10,6 +10,7 @@ import { applyTheme, readSettings, registerIpc } from './ipc'
 import { buildMenu, focusedOrFirstWindow } from './menu'
 import { JobRunner } from './services/jobs'
 import { createFileLogger } from './services/logger'
+import { useNetworkStack } from './services/metadata'
 import { TaggingService } from './tagging/service'
 import { createMainWindow, isTrustedUrl, showLegalDocs } from './window'
 
@@ -38,6 +39,13 @@ if (!app.requestSingleInstanceLock()) {
 
     // Deny every permission prompt (camera, geolocation, notifications, ...): the UI needs none.
     session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
+
+    // Look pages up through Chromium's network stack rather than Node's. Sites behind bot protection (Cloudflare and
+    // the like) answer it as they answer a browser; Node's fetch is turned away with a challenge page, which arrives
+    // as an HTTP 403 and reads like a dead link. The session is its own and is not written to disk, so cookies those
+    // pages set are forgotten when the app closes.
+    const pageSession = session.fromPartition('cairn-fetch')
+    useNetworkStack((input, init) => pageSession.fetch(String(input), init))
 
     const repo = new Repo(openDatabase(join(app.getPath('userData'), 'cairn.db')))
     const settings = readSettings(repo)

@@ -95,9 +95,28 @@ function errorCodes(error: unknown, depth = 0): string[] {
   return codes
 }
 
+/**
+ * Chromium reports failures as `net::ERR_...` in the message rather than as a code, so its wording is mapped onto
+ * the same kinds. (The app fetches pages through Chromium's network stack; Node's own fetch is used in tests.)
+ */
+const CHROMIUM_FAILURES: [RegExp, NetworkFailure][] = [
+  [/ERR_NAME_NOT_RESOLVED|ERR_NAME_RESOLUTION_FAILED/, 'dns'],
+  [/ERR_DNS_|ERR_NAME_RESOLUTION_TIMED_OUT/, 'dns-temporary'],
+  [/ERR_CONNECTION_REFUSED/, 'refused'],
+  [/ERR_(CONNECTION|SOCKET)_(TIMED_OUT|TIMEOUT)|ERR_TIMED_OUT/, 'timeout'],
+  [/ERR_(CONNECTION_RESET|CONNECTION_CLOSED|CONNECTION_ABORTED|EMPTY_RESPONSE|HTTP2_PROTOCOL_ERROR|QUIC_PROTOCOL_ERROR|RESPONSE_HEADERS_TRUNCATED)/, 'reset'],
+  [/ERR_(ADDRESS_UNREACHABLE|INTERNET_DISCONNECTED|NETWORK_CHANGED|NAME_NOT_RESOLVED_TEMPORARY|ADDRESS_INVALID|NETWORK_ACCESS_DENIED|PROXY_CONNECTION_FAILED)/, 'unreachable'],
+  [/ERR_(CERT_|SSL_|BAD_SSL|TLS)/, 'tls']
+]
+
 export function classifyNetworkError(error: unknown): NetworkFailure {
   const name = (error as { name?: string } | null)?.name
   if (name === 'TimeoutError' || name === 'AbortError') return 'timeout'
+  const message = String((error as { message?: unknown } | null)?.message ?? '')
+  if (message.includes('net::ERR_')) {
+    for (const [pattern, failure] of CHROMIUM_FAILURES) if (pattern.test(message)) return failure
+    return 'other'
+  }
   const codes = errorCodes(error)
   const has = (...wanted: string[]): boolean => codes.some((c) => wanted.includes(c))
   if (has('ENOTFOUND')) return 'dns'
@@ -113,7 +132,7 @@ export function classifyNetworkError(error: unknown): NetworkFailure {
 /** Short human-readable reason for a failed request, e.g. "dns (ENOTFOUND)" or "timeout". */
 export function describeNetworkError(error: unknown): string {
   const kind = classifyNetworkError(error)
-  const code = errorCodes(error)[0]
+  const code = errorCodes(error)[0] ?? /net::(ERR_[A-Z0-9_]+)/.exec(String((error as { message?: unknown } | null)?.message ?? ''))?.[1]
   return code ? kind + ' (' + code + ')' : kind
 }
 
