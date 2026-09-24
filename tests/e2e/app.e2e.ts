@@ -703,7 +703,7 @@ describe('Cairn (real app)', () => {
 
     // Undo from Tools: the three spellings come back on the bookmarks they were on.
     await page.getByRole('button', { name: 'Tools' }).click()
-    await page.getByRole('dialog', { name: 'Duplicates & broken links' }).getByRole('button', { name: 'Undo last tidy' }).click()
+    await page.getByRole('dialog', { name: 'Duplicates & broken links' }).getByRole('button', { name: 'Undo tidy tags' }).click()
     await expect(page.getByText(/Tidy undone/).last()).toBeVisible()
     const restored = (await cairn((api) => api.tags.list())).map((t) => t.name)
     expect(restored).toEqual(expect.arrayContaining(['ad-blocker', 'ad-blockers', 'ad-blocking', 'lonely-idea']))
@@ -779,7 +779,7 @@ describe('Cairn (real app)', () => {
     await page.getByRole('dialog', { name: 'Duplicates & broken links' }).getByRole('button', { name: /Tidy collections/ }).click()
     const confirm = page.getByRole('dialog', { name: /Remove \d+ empty collections\?/ })
     await expect(confirm).toContainText('Empty outer / Empty inner / Empty deepest')
-    await expect(confirm).toContainText('cannot be undone')
+    await expect(confirm).toContainText('you can undo this')
     await expect(confirm).not.toContainText('Has one')
     await shot('24-tidy-collections')
     await confirm.getByRole('button', { name: 'Remove them' }).click()
@@ -798,10 +798,23 @@ describe('Cairn (real app)', () => {
     await expect(page.locator('.nav-section.tree')).not.toContainText('Empty outer')
 
     // Nothing left to do the second time.
+    const tools = page.getByRole('dialog', { name: 'Duplicates & broken links' })
     await page.getByRole('button', { name: 'Tools' }).click()
-    await page.getByRole('dialog', { name: 'Duplicates & broken links' }).getByRole('button', { name: /Tidy collections/ }).click()
+    await tools.getByRole('button', { name: /Tidy collections/ }).click()
     await expect(page.getByText('Every collection has bookmarks in it.').last()).toBeVisible()
+
+    // Undo puts them all back where they were, and then there is nothing to undo.
+    await tools.getByRole('button', { name: /Undo tidy collections/ }).click()
+    await expect(page.getByText(/collections are back where they were/).last()).toBeVisible()
+    expect(await cairn((api) => api.collections.list())).toEqual(before)
+    await expect(page.locator('.nav-section.tree')).toContainText('Empty outer')
+    await expect(tools.getByRole('button', { name: /Undo tidy collections/ })).toBeDisabled()
     await page.keyboard.press('Escape')
+
+    // Put the library back to how the later tests expect it.
+    await cairn(async (api) => api.tools.removeEmptyCollections((await api.tools.emptyCollections()).map((c) => c.id)))
+    await page.reload()
+    await page.waitForSelector('.bm')
   })
 
   it('has no renderer errors or CSP violations', () => {

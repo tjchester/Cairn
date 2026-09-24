@@ -38,6 +38,29 @@ interface TidyMergeRow {
   /** The kept tag's own row on this bookmark before the merge (null: the bookmark did not have it). */
   keeperBefore: { source: string; runId: number | null } | null
 }
+/** Orders removed collections so that a parent always comes before its children. */
+function parentsFirst(rows: readonly TidyCollectionRow[]): TidyCollectionRow[] {
+  const byId = new Map(rows.map((r) => [r.id, r]))
+  const out: TidyCollectionRow[] = []
+  const done = new Set<number>()
+  const visit = (row: TidyCollectionRow): void => {
+    if (done.has(row.id)) return
+    done.add(row.id)
+    const parent = row.parentId === null ? undefined : byId.get(row.parentId)
+    if (parent) visit(parent)
+    out.push(row)
+  }
+  rows.forEach(visit)
+  return out
+}
+
+interface TidyCollectionRow {
+  id: number
+  parentId: number | null
+  name: string
+  color: string | null
+  position: number
+}
 interface TidyRemovedRow {
   b: number
   tag: string
@@ -341,16 +364,60 @@ export class Repo {
    * Removes the given collections, but only those that are still empty (nothing was added while you looked at the
    * list). Sub-collections go with their parent, so removing a whole empty branch takes one delete.
    */
-  removeEmptyCollections(ids: number[]): { removed: number } {
+  removeEmptyCollections(ids: number[]): { removed: number; id: number | null } {
     return this.tx(() => {
       const allowed = new Set(this.emptyCollections().map((c) => c.id))
-      let removed = 0
+      const gone: TidyCollectionRow[] = []
       for (const id of ids) {
         if (!allowed.has(id) || !this.getCollection(id)) continue // not empty any more, or already gone with its parent
-        removed += 1 + this.descendantIds(id).length
+        // Remember the whole branch so it can be rebuilt in the same shape.
+        for (const branchId of [id, ...this.descendantIds(id)]) {
+          const c = this.getCollection(branchId)
+          if (c) gone.push({ id: c.id, parentId: c.parentId, name: c.name, color: c.color, position: c.position })
+        }
         this.run('DELETE FROM collections WHERE id = ?', id) // sub-collections cascade
       }
-      return { removed }
+      if (gone.length === 0) return { removed: 0, id: null }
+      return { removed: gone.length, id: this.logTidy('collections', 0, gone.length, { collections: gone }) }
+    })
+  }
+
+  /**
+   * Puts back the collections a tidy removed, with their names, colours and nesting. Each keeps its old id when that
+   * is still free, so anything pointing at it lines up again; one taken by a collection made since gets a new id.
+   * A collection whose parent has gone in the meantime comes back at the top level.
+   */
+  undoCollectionTidy(id: number): { restored: number } {
+    return this.tx(() => {
+      const { collections } = this.readTidy(id, 'collections') as { collections: TidyCollectionRow[] }
+      const remap = new Map<number, number>()
+      let restored = 0
+      // Put a parent back before its children, so each child has somewhere to go.
+      for (const c of parentsFirst(collections)) {
+        // Everything here was removed, so an id that is in use again belongs to something made since: leave that be
+        // and give this one a new id instead.
+        const parentId = c.parentId === null ? null : (remap.get(c.parentId) ?? (this.getCollection(c.parentId) ? c.parentId : null))
+        const free = this.get('SELECT 1 AS x FROM collections WHERE id = ?', c.id) === undefined
+        if (free) {
+          const now = new Date().toISOString()
+          this.run(
+            'INSERT INTO collections (id, parent_id, name, color, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            c.id,
+            parentId,
+            c.name,
+            c.color,
+            c.position,
+            now,
+            now
+          )
+          remap.set(c.id, c.id)
+        } else {
+          remap.set(c.id, this.createCollection({ name: c.name, parentId, color: c.color }).id)
+        }
+        restored++
+      }
+      this.run('UPDATE tidy_log SET undone = 1 WHERE id = ?', id)
+      return { restored }
     })
   }
 
@@ -854,31 +921,43 @@ export class Repo {
       this.refreshSearchText([...affected])
 
       if (merges.length === 0 && removed.length === 0) return { id: null, merged: 0, removed: 0, keptAsOnlyTag }
-      const id = this.insert(
-        'INSERT INTO tidy_log (created_at, merged, removed, payload) VALUES (?, ?, ?, ?)',
-        new Date().toISOString(),
-        mergedTags,
-        removed.length,
-        JSON.stringify({ merges, removed })
-      )
-      this.run('DELETE FROM tidy_log WHERE id NOT IN (SELECT id FROM tidy_log ORDER BY id DESC LIMIT 3)')
+      const id = this.logTidy('tags', mergedTags, removed.length, { merges, removed })
       return { id, merged: mergedTags, removed: removed.length, keptAsOnlyTag }
     })
   }
 
   /** The latest tidy that has not been undone. */
-  lastTidy(): TidyLogInfo | null {
-    const r = this.get('SELECT id, created_at, merged, removed FROM tidy_log WHERE undone = 0 ORDER BY id DESC LIMIT 1')
-    return r ? { id: Number(r.id), createdAt: String(r.created_at), merged: Number(r.merged), removed: Number(r.removed) } : null
+  lastTidy(kind: TidyLogInfo['kind'] = 'tags'): TidyLogInfo | null {
+    const r = this.get('SELECT id, created_at, merged, removed FROM tidy_log WHERE undone = 0 AND kind = ? ORDER BY id DESC LIMIT 1', kind)
+    return r ? { id: Number(r.id), createdAt: String(r.created_at), kind, merged: Number(r.merged), removed: Number(r.removed) } : null
+  }
+
+  /** Records what a tidy changed so it can be undone, keeping only the latest few of each kind. */
+  private logTidy(kind: TidyLogInfo['kind'], merged: number, removed: number, payload: unknown): number {
+    const logId = this.insert(
+      'INSERT INTO tidy_log (created_at, kind, merged, removed, payload) VALUES (?, ?, ?, ?, ?)',
+      new Date().toISOString(),
+      kind,
+      merged,
+      removed,
+      JSON.stringify(payload)
+    )
+    this.run('DELETE FROM tidy_log WHERE kind = ? AND id NOT IN (SELECT id FROM tidy_log WHERE kind = ? ORDER BY id DESC LIMIT 3)', kind, kind)
+    return logId
+  }
+
+  /** What a tidy recorded, if it can still be undone. */
+  private readTidy(logId: number, kind: TidyLogInfo['kind']): unknown {
+    const row = this.get('SELECT kind, payload, undone FROM tidy_log WHERE id = ?', logId)
+    if (!row || String(row.kind) !== kind) throw new Error('That tidy is no longer available to undo.')
+    if (Number(row.undone) === 1) throw new Error('That tidy was already undone.')
+    return JSON.parse(String(row.payload))
   }
 
   /** Puts back exactly what a tidy changed (merged tags come apart again, removed tags return). */
   undoTidy(id: number): TidyResult {
     return this.tx(() => {
-      const row = this.get('SELECT merged, removed, payload, undone FROM tidy_log WHERE id = ?', id)
-      if (!row) throw new Error('That tidy is no longer available to undo.')
-      if (Number(row.undone) === 1) throw new Error('That tidy was already undone.')
-      const payload = JSON.parse(String(row.payload)) as { merges: TidyMergeRow[]; removed: TidyRemovedRow[] }
+      const payload = this.readTidy(id, 'tags') as { merges: TidyMergeRow[]; removed: TidyRemovedRow[] }
       const affected = new Set<number>()
       const exists = (bookmarkId: number): boolean => this.get('SELECT 1 AS x FROM bookmarks WHERE id = ?', bookmarkId) !== undefined
 
@@ -904,7 +983,7 @@ export class Repo {
       this.run('UPDATE tidy_log SET undone = 1 WHERE id = ?', id)
       this.pruneTags()
       this.refreshSearchText([...affected])
-      return { id, merged: Number(row.merged), removed: Number(row.removed), keptAsOnlyTag: 0 }
+      return { id, merged: payload.merges.length, removed: payload.removed.length, keptAsOnlyTag: 0 }
     })
   }
 

@@ -45,6 +45,8 @@ const api: CairnApi = {
     findDuplicates: () => invoke('tools:findDuplicates'),
     emptyCollections: () => invoke('tools:emptyCollections'),
     removeEmptyCollections: (ids) => invoke('tools:removeEmptyCollections', ids),
+    lastCollectionTidy: () => invoke('tools:lastCollectionTidy'),
+    undoCollectionTidy: (id) => invoke('tools:undoCollectionTidy', id),
     startJob: (kind, options) => invoke('tools:startJob', kind, options),
     cancelJob: (id) => invoke('tools:cancelJob', id)
   },

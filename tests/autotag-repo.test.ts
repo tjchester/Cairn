@@ -120,6 +120,25 @@ describe('what the local model has already done', () => {
   })
 })
 
+describe('schema upgrade (v4 -> v5): the tidy log gains a kind', () => {
+  it('treats the entries that were already there as tag tidies', () => {
+    const file = join(dir, 'v4.db')
+    const old = new DatabaseSync(file)
+    old.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;')
+    for (const step of MIGRATIONS.slice(0, 4)) old.exec(step)
+    old.exec('PRAGMA user_version = 4')
+    old.exec(`INSERT INTO tidy_log (created_at, merged, removed, payload) VALUES ('2026-09-24T00:00:00.000Z', 2, 5, '{"merges":[],"removed":[]}')`)
+    old.close()
+
+    const db = openDatabase(file)
+    const repo = new Repo(db)
+    expect(repo.lastTidy('tags')).toMatchObject({ kind: 'tags', merged: 2, removed: 5 })
+    expect(repo.lastTidy('collections')).toBeNull()
+    db.close()
+    expect(existsSync(file + '.v4.bak')).toBe(true)
+  })
+})
+
 describe('tag provenance', () => {
   it('records which tags were added automatically, and keeps that when the bookmark is edited', () => {
     const repo = makeRepo()

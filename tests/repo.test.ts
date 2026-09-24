@@ -216,6 +216,77 @@ describe('tidying empty collections', () => {
     expect(repo.getCollection(old.id)).toBeNull()
   })
 
+it('can be undone: the branch comes back with its names, colours, nesting and ids', () => {
+    const { repo, dev, rust, old, recipes } = library()
+    repo.updateCollection(rust.id, { color: '#3e63dd' })
+    const before = JSON.stringify(repo.listCollections())
+
+    const result = repo.removeEmptyCollections(repo.emptyCollections().map((c) => c.id))
+    expect(result).toMatchObject({ removed: 3 })
+    expect(repo.lastTidy('collections')).toMatchObject({ id: result.id, kind: 'collections', removed: 3, merged: 0 })
+
+    expect(repo.undoCollectionTidy(result.id as number)).toEqual({ restored: 3 })
+    expect(JSON.stringify(repo.listCollections())).toBe(before) // same rows, same ids
+    expect(repo.getCollection(rust.id)).toMatchObject({ name: 'Rust', parentId: dev.id, color: '#3e63dd' })
+    expect(repo.getCollection(old.id)).toMatchObject({ name: 'Old', parentId: rust.id })
+    expect(repo.getCollection(recipes.id)).toMatchObject({ name: 'Recipes', parentId: null })
+    expect(repo.lastTidy('collections')).toBeNull()
+    expect(() => repo.undoCollectionTidy(result.id as number)).toThrow(/already undone/)
+  })
+
+  it('gives a restored collection a new id when something made since has taken its old one', () => {
+    const repo = makeRepo()
+    const gone = repo.createCollection({ name: 'Gone' })
+    const result = repo.removeEmptyCollections([gone.id])
+    const squatter = repo.createCollection({ name: 'Newcomer' }) // takes the id that was just freed
+    expect(squatter.id).toBe(gone.id)
+
+    expect(repo.undoCollectionTidy(result.id as number)).toEqual({ restored: 1 })
+    const names = repo.listCollections().map((c) => c.name).sort()
+    expect(names).toEqual(['Gone', 'Newcomer'])
+    expect(repo.getCollection(squatter.id)?.name).toBe('Newcomer') // untouched
+  })
+
+  it('brings a collection back at the top level when its parent has gone in the meantime', () => {
+    const repo = makeRepo()
+    const parent = repo.createCollection({ name: 'Parent' })
+    const child = repo.createCollection({ name: 'Child', parentId: parent.id })
+    const keep = repo.createCollection({ name: 'Keeps', parentId: parent.id })
+    repo.createBookmark({ url: 'https://a.example/', collectionId: keep.id })
+
+    const result = repo.removeEmptyCollections([child.id]) // only the child is empty
+    repo.trash([repo.query(q({ scope: { kind: 'collection', id: keep.id } })).items[0]?.id ?? 0])
+    repo.emptyTrash()
+    repo.deleteCollection(parent.id) // the parent goes as well, taking "Keeps" with it
+
+    expect(repo.undoCollectionTidy(result.id as number)).toEqual({ restored: 1 })
+    expect(repo.getCollection(child.id)).toMatchObject({ name: 'Child', parentId: null })
+  })
+
+  it('refuses to undo something that is not a collection tidy', () => {
+    const repo = makeRepo()
+    const b = repo.createBookmark({ url: 'https://a.example/', tags: ['Foo', 'Foos'] })
+    const tags = repo.applyTidy({ merges: [{ keep: 'Foo', from: ['Foos'] }], remove: [], rareMaxUses: 2, keepOnlyTag: false })
+    expect(repo.lastTidy('collections')).toBeNull() // a tag tidy is not offered here
+    expect(() => repo.undoCollectionTidy(tags.id as number)).toThrow(/no longer available/)
+    expect(() => repo.undoTidy(tags.id as number)).not.toThrow()
+    expect(repo.getBookmark(b.id)?.tags).toEqual(['Foo', 'Foos'])
+  })
+
+  it('keeps the latest few tidies of each kind, without one crowding out the other', () => {
+    const repo = makeRepo()
+    repo.createBookmark({ url: 'https://a.example/', tags: ['Bar', 'Bars'] })
+    const tags = repo.applyTidy({ merges: [{ keep: 'Bar', from: ['Bars'] }], remove: [], rareMaxUses: 2, keepOnlyTag: false })
+    for (let i = 0; i < 4; i++) {
+      const c = repo.createCollection({ name: 'Empty ' + i })
+      repo.removeEmptyCollections([c.id])
+    }
+    expect(repo.lastTidy('tags')).toMatchObject({ id: tags.id }) // still there to undo
+    const kept = (repo as unknown as { all(sql: string): { kind: string }[] }).all("SELECT kind FROM tidy_log ORDER BY id")
+    expect(kept.filter((r) => r.kind === 'collections')).toHaveLength(3)
+    expect(kept.filter((r) => r.kind === 'tags')).toHaveLength(1)
+  })
+
   it('says there is nothing to do for a library with no collections', () => {
     const repo = makeRepo()
     repo.createBookmark({ url: 'https://a.example/' })

@@ -132,6 +132,10 @@ export const MIGRATIONS: string[] = [
     payload    TEXT NOT NULL,
     undone     INTEGER NOT NULL DEFAULT 0
   );
+  `,
+  /* v5 */ `
+  -- Which kind of tidy an entry can put back: 'tags' (merged and removed tags) or 'collections' (empty ones).
+  ALTER TABLE tidy_log ADD COLUMN kind TEXT NOT NULL DEFAULT 'tags';
   `
 ]
 

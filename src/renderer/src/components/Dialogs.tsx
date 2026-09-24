@@ -537,7 +537,7 @@ function AutoTagPanel(): React.JSX.Element {
           <Icon name="tag" /> Tidy tags…
         </button>
         <button className="btn" disabled={busy || !lastTidy} onClick={() => lastTidy && void s.undoTidy(lastTidy.id).then(() => api.tagging.tidy.last().then(setLastTidy))} title={lastTidy ? 'Puts back what the last tidy changed' : 'Nothing to undo'}>
-          <Icon name="undo" /> Undo last tidy
+          <Icon name="undo" /> Undo tidy tags
         </button>
         <button className="btn danger-text" disabled={busy} onClick={() => void removeAll()}>
           Remove all automatic tags
@@ -621,6 +621,22 @@ function Duplicates(): React.JSX.Element {
 function TidyCollections(): React.JSX.Element {
   const s = useStore()
   const [busy, setBusy] = useState(false)
+  const [lastTidy, setLastTidy] = useState<TidyLogInfo | null>(null)
+  const collectionCount = s.collections.length
+  useEffect(() => void api.tools.lastCollectionTidy().then(setLastTidy), [collectionCount])
+
+  const plural = (n: number): string => n + (n === 1 ? ' empty collection' : ' empty collections')
+
+  const undo = async (id: number): Promise<void> => {
+    try {
+      const { restored } = await api.tools.undoCollectionTidy(id)
+      s.toast(restored === 1 ? 'The collection is back.' : restored + ' collections are back where they were.', 'success')
+      await s.refreshAll()
+      setLastTidy(await api.tools.lastCollectionTidy())
+    } catch (error) {
+      s.toast(errorMessage(error), 'error')
+    }
+  }
 
   const tidy = async (): Promise<void> => {
     setBusy(true)
@@ -634,14 +650,16 @@ function TidyCollections(): React.JSX.Element {
       const rest = empty.length - shown.length
       const yes = await s.confirm({
         title: empty.length === 1 ? 'Remove this empty collection?' : 'Remove ' + empty.length + ' empty collections?',
-        message: [shown.join('\n') + (rest > 0 ? '\n…and ' + rest + ' more' : ''), 'No bookmarks are affected, but this cannot be undone.'].join('\n\n'),
+        message: [shown.join('\n') + (rest > 0 ? '\n…and ' + rest + ' more' : ''), 'No bookmarks are affected, and you can undo this.'].join('\n\n'),
         confirmLabel: empty.length === 1 ? 'Remove it' : 'Remove them',
         danger: true
       })
       if (!yes) return
-      const removed = await api.tools.removeEmptyCollections(empty.map((c) => c.id))
-      s.toast(removed === 0 ? 'Nothing needed removing.' : removed + (removed === 1 ? ' empty collection removed' : ' empty collections removed'), 'success')
+      const result = await api.tools.removeEmptyCollections(empty.map((c) => c.id))
       await s.refreshAll()
+      setLastTidy(await api.tools.lastCollectionTidy())
+      if (result.id === null) s.toast('Nothing needed removing.', 'info')
+      else s.toast(plural(result.removed) + ' removed.', 'success', { label: 'Undo', onClick: () => void undo(result.id as number) })
     } catch (error) {
       s.toast(errorMessage(error), 'error')
     } finally {
@@ -661,6 +679,14 @@ function TidyCollections(): React.JSX.Element {
       <div className="button-row">
         <button className="btn" disabled={busy} onClick={() => void tidy()}>
           <Icon name="deleteFolder" /> {busy ? 'Looking…' : 'Tidy collections…'}
+        </button>
+        <button
+          className="btn"
+          disabled={busy || !lastTidy}
+          onClick={() => lastTidy && void undo(lastTidy.id)}
+          title={lastTidy ? 'Puts back the collections the last tidy removed' : 'Nothing to undo'}
+        >
+          <Icon name="undo" /> Undo tidy collections{lastTidy ? ' (' + plural(lastTidy.removed) + ')' : ''}
         </button>
       </div>
     </section>

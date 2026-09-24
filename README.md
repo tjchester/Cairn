@@ -8,7 +8,7 @@ Raindrop.io. It shares no code or assets with them and is not affiliated with an
 
 ## Features
 
-- **Collections** – nested and colorable, always listed A–Z; drag one onto another to file it inside, or onto the *Collections* heading to bring it back to the top. Deleting one sends its bookmarks to the Trash, and *Tools → Tidy collections* clears out the ones holding no bookmarks at all.
+- **Collections** – nested and colorable, always listed A–Z; drag one onto another to file it inside, or onto the *Collections* heading to bring it back to the top. Deleting one sends its bookmarks to the Trash, and *Tools → Tidy collections* clears out the ones holding no bookmarks at all (it shows what would go, and can be undone).
 - **Tags** – listed A–Z, autocomplete, rename/merge/delete, drag bookmarks onto a tag to apply it.
 - **A sidebar you can fold up** – the *Collections* and *Tags* headings each have an arrow that closes just that list (it says how many it is hiding, and remembers your choice). Hiding the whole sidebar is still `Ctrl/⌘ + B`.
 - **Auto-tagging** – built-in and offline, with an optional local model (see *Auto-tagging* below).
@@ -184,7 +184,7 @@ Models like to invent look-alike and one-off tags, so Cairn works against that:
 
 ### Data notes
 
-Auto-tagging needed database upgrades (schema v2, v3 for remembering what the model has done, v4 for the Tidy tags undo log). Before each upgrade Cairn copies
+Auto-tagging needed database upgrades (schema v2, v3 for remembering what the model has done, v4 for the tidy undo log and v5 to widen it to collections). Before each upgrade Cairn copies
 your library to `cairn.db.v<old version>.bak` in the data folder; v3 also recovers, from earlier runs, which bookmarks the model
 had already handled. *Fetch missing details* now means "no page signals stored yet", so after the upgrade
 it re-reads pages once to learn what tagging needs; lookups that failed are retried on the next run and pages with no cover

@@ -290,7 +290,11 @@ export interface TidyResult {
 export interface TidyLogInfo {
   id: number
   createdAt: string
+  /** What it can put back. */
+  kind: 'tags' | 'collections'
+  /** Tags folded into another (always 0 for a collections tidy). */
   merged: number
+  /** Tag uses removed, or collections removed. */
   removed: number
 }
 
@@ -434,8 +438,12 @@ export interface CairnApi {
     findDuplicates(): Promise<Bookmark[][]>
     /** Collections holding no bookmarks at all, deepest first. Nothing is changed. */
     emptyCollections(): Promise<EmptyCollection[]>
-    /** Removes those of `ids` that are still empty (sub-collections go with them). Returns how many were removed. */
-    removeEmptyCollections(ids: number[]): Promise<number>
+    /** Removes those of `ids` that are still empty (sub-collections go with them). `id` is the entry `undoCollectionTidy` takes. */
+    removeEmptyCollections(ids: number[]): Promise<{ removed: number; id: number | null }>
+    /** The latest collection tidy that has not been undone. */
+    lastCollectionTidy(): Promise<TidyLogInfo | null>
+    /** Puts the removed collections back where they were. */
+    undoCollectionTidy(id: number): Promise<{ restored: number }>
     startJob(kind: JobKind, options?: StartJobOptions): Promise<string | null>
     cancelJob(id: string): Promise<void>
   }
