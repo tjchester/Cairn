@@ -1,8 +1,12 @@
 import { copyFileSync, existsSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
+import { urlKey } from '@shared/url'
 
-// Each entry migrates the schema from version N to N + 1 (tracked with PRAGMA user_version).
-export const MIGRATIONS: string[] = [
+// Each entry migrates the schema from version N to N + 1 (tracked with PRAGMA user_version): SQL, or a function
+// for the steps that need to look at the data.
+export type Migration = string | ((db: DatabaseSync) => void)
+
+export const MIGRATIONS: Migration[] = [
   /* v1 */ `
   CREATE TABLE collections (
     id          INTEGER PRIMARY KEY,
@@ -136,8 +140,22 @@ export const MIGRATIONS: string[] = [
   /* v5 */ `
   -- Which kind of tidy an entry can put back: 'tags' (merged and removed tags) or 'collections' (empty ones).
   ALTER TABLE tidy_log ADD COLUMN kind TEXT NOT NULL DEFAULT 'tags';
-  `
+  `,
+  /* v6 */ recomputeUrlKeys
 ]
+
+/**
+ * The key that decides whether two bookmarks are the same page is worked out when a bookmark is saved, so the rows
+ * already in the library still carry the older rules (which kept `?ref=…` and other "where you came from" markers
+ * apart). Working them out again lets the duplicate finder see those pairs.
+ */
+function recomputeUrlKeys(db: DatabaseSync): void {
+  const update = db.prepare('UPDATE bookmarks SET url_key = ? WHERE id = ?')
+  for (const row of db.prepare('SELECT id, url, url_key FROM bookmarks').all() as { id: number; url: string; url_key: string }[]) {
+    const key = urlKey(String(row.url))
+    if (key !== row.url_key) update.run(key, Number(row.id))
+  }
+}
 
 export function openDatabase(file: string): DatabaseSync {
   const db = new DatabaseSync(file)
@@ -165,7 +183,9 @@ function migrate(db: DatabaseSync, file: string): void {
   for (let version = current; version < MIGRATIONS.length; version++) {
     db.exec('BEGIN')
     try {
-      db.exec(MIGRATIONS[version] as string)
+      const step = MIGRATIONS[version] as Migration
+      if (typeof step === 'string') db.exec(step)
+      else step(db)
       db.exec(`PRAGMA user_version = ${version + 1}`)
       db.exec('COMMIT')
     } catch (error) {

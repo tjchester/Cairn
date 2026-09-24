@@ -8,16 +8,25 @@ import { Repo } from '../src/main/db/repo'
 import { makeRepo, q } from './helpers'
 
 const dir = mkdtempSync(join(tmpdir(), 'cairn-db-'))
+
+/** A database left exactly as an older version of the app would have left it. */
+function atVersion(file: string, version: number): DatabaseSync {
+  const db = new DatabaseSync(file)
+  db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;')
+  for (const step of MIGRATIONS.slice(0, version)) {
+    if (typeof step === 'string') db.exec(step)
+    else step(db)
+  }
+  db.exec('PRAGMA user_version = ' + version)
+  return db
+}
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
 describe('schema upgrade (v1 -> v2)', () => {
   it('keeps every existing row, adds the new columns, and backs the old database up first', () => {
     const file = join(dir, 'old.db')
     // A database exactly as v1 of the app left it.
-    const old = new DatabaseSync(file)
-    old.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;')
-    old.exec(MIGRATIONS[0] as string)
-    old.exec('PRAGMA user_version = 1')
+    const old = atVersion(file, 1)
     old.exec("INSERT INTO bookmarks (url, url_key, title, domain, created_at, updated_at) VALUES ('https://a.com/', 'a.com', 'A', 'a.com', '2026-01-01', '2026-01-01')")
     old.exec("INSERT INTO tags (name) VALUES ('keep')")
     old.exec('INSERT INTO bookmark_tags (bookmark_id, tag_id) VALUES (1, 1)')
@@ -50,11 +59,7 @@ describe('schema upgrade (v1 -> v2)', () => {
 describe('schema upgrade (v2 -> v3): remembering what the local model has done', () => {
   it('recovers which bookmarks earlier model runs already handled, and nothing else', () => {
     const file = join(dir, 'v2.db')
-    const old = new DatabaseSync(file)
-    old.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;')
-    old.exec(MIGRATIONS[0] as string)
-    old.exec(MIGRATIONS[1] as string)
-    old.exec('PRAGMA user_version = 2')
+    const old = atVersion(file, 2)
     const at = '2026-09-20T17:00:00.000Z'
     for (let i = 1; i <= 7; i++) old.exec(`INSERT INTO bookmarks (url, url_key, title, domain, created_at, updated_at) VALUES ('https://s${i}.com/', 's${i}.com', 'B${i}', 's${i}.com', '${at}', '${at}')`)
     for (const [id, kind] of [[1, 'auto-tag'], [2, 'auto-tag'], [3, 'review']] as const) old.exec(`INSERT INTO tag_runs (id, kind, mode, created_at) VALUES (${id}, '${kind}', 'auto', '${at}')`)
@@ -123,10 +128,7 @@ describe('what the local model has already done', () => {
 describe('schema upgrade (v4 -> v5): the tidy log gains a kind', () => {
   it('treats the entries that were already there as tag tidies', () => {
     const file = join(dir, 'v4.db')
-    const old = new DatabaseSync(file)
-    old.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;')
-    for (const step of MIGRATIONS.slice(0, 4)) old.exec(step)
-    old.exec('PRAGMA user_version = 4')
+    const old = atVersion(file, 4)
     old.exec(`INSERT INTO tidy_log (created_at, merged, removed, payload) VALUES ('2026-09-24T00:00:00.000Z', 2, 5, '{"merges":[],"removed":[]}')`)
     old.close()
 
@@ -136,6 +138,32 @@ describe('schema upgrade (v4 -> v5): the tidy log gains a kind', () => {
     expect(repo.lastTidy('collections')).toBeNull()
     db.close()
     expect(existsSync(file + '.v4.bak')).toBe(true)
+  })
+})
+
+describe('schema upgrade (v5 -> v6): duplicate keys are worked out again', () => {
+  it('spots pairs that only older rules kept apart, without touching the addresses', () => {
+    const file = join(dir, 'v5.db')
+    const old = atVersion(file, 5)
+    const add = (id: number, url: string, key: string, title: string) =>
+      old.exec(
+        `INSERT INTO bookmarks (id, url, url_key, title, domain, created_at, updated_at) VALUES (${id}, '${url}', '${key}', '${title}', 'wizardzines.com', '2026-01-01', '2026-01-01')`
+      )
+    // Exactly what the older rules stored: the "?ref=" copy had a key of its own.
+    add(1, 'https://wizardzines.com/', 'wizardzines.com', 'Wizard Zines')
+    add(2, 'https://wizardzines.com/?ref=blog.pragmaticengineer.com', 'wizardzines.com?ref=blog.pragmaticengineer.com', 'Wizard Zines')
+    add(3, 'https://wizardzines.com/comics/', 'wizardzines.com/comics', 'Comics')
+    old.close()
+
+    const db = openDatabase(file)
+    const repo = new Repo(db)
+    const groups = repo.findDuplicateGroups()
+    expect(groups).toHaveLength(1)
+    expect(groups[0]?.map((b) => b.id)).toEqual([1, 2])
+    expect(groups[0]?.map((b) => b.url)).toEqual(['https://wizardzines.com/', 'https://wizardzines.com/?ref=blog.pragmaticengineer.com']) // kept as saved
+    expect(repo.findByUrl('https://wizardzines.com/?ref=anything-else')?.id).toBe(1) // and adding it again finds the one you have
+    expect(repo.getBookmark(3)?.url).toBe('https://wizardzines.com/comics/')
+    db.close()
   })
 })
 

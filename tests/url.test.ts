@@ -26,6 +26,19 @@ describe('urlKey', () => {
     expect(a).toBe(b)
   })
 
+  it('ignores the markers that only say where you came from', () => {
+    const plain = urlKey('https://wizardzines.com/')
+    expect(urlKey('https://wizardzines.com/?ref=blog.pragmaticengineer.com')).toBe(plain)
+    expect(urlKey('https://wizardzines.com/?referrer=x&utm_source=newsletter')).toBe(plain)
+    for (const param of ['ref', 'referer', 'referrer', 'fbclid', 'gclid', 'mc_eid', 'mkt_tok', 'si', 'spm', '_ga', 'igshid', 'srsltid', 'trk']) {
+      expect(urlKey('https://example.com/a?' + param + '=123'), param).toBe(urlKey('https://example.com/a'))
+    }
+    // ...while the ones that choose the page are kept, so two real pages stay apart.
+    for (const param of ['id', 'page', 'q', 'v', 't', 'src', 'source', 'from', 'lang', 'tab', 'p']) {
+      expect(urlKey('https://example.com/a?' + param + '=123'), param).not.toBe(urlKey('https://example.com/a'))
+    }
+  })
+
   it('keeps meaningful differences', () => {
     expect(urlKey('https://example.com/a')).not.toBe(urlKey('https://example.com/b'))
     expect(urlKey('https://example.com/?id=1')).not.toBe(urlKey('https://example.com/?id=2'))

@@ -30,7 +30,9 @@ Raindrop.io. It shares no code or assets with them and is not affiliated with an
   Title, description, cover image and site icon are fetched automatically. Pasting several links adds them all.
 - **Import / export** – browser bookmark files (Chrome, Edge, Firefox, Safari… "Netscape HTML"), CSV, and a
   lossless JSON backup. Nested folders become nested collections; duplicates are skipped.
-- **Duplicate finder** – ignores `http`/`https`, `www`, trailing slashes, `#fragments` and tracking parameters (`utm_*`, `fbclid`, …).
+- **Duplicate finder** – ignores `http`/`https`, `www`, trailing slashes, `#fragments` and the parameters that only say where you came from
+  (`utm_*`, `?ref=`, `fbclid`, `srsltid`, `si`, …), so one page saved from two places is one bookmark. The same comparison decides what an
+  import skips and warns you when you add something you already have.
 - **Broken-link checker and "fetch missing details"** – background jobs with progress and cancel that are polite and
   resilient (see *Bulk requests* below).
 - **Trash with undo**, multi-select and bulk actions, favorites, notes, keyboard shortcuts (press `Ctrl/⌘ + /`).
@@ -184,7 +186,8 @@ Models like to invent look-alike and one-off tags, so Cairn works against that:
 
 ### Data notes
 
-Auto-tagging needed database upgrades (schema v2, v3 for remembering what the model has done, v4 for the tidy undo log and v5 to widen it to collections). Before each upgrade Cairn copies
+Auto-tagging needed database upgrades (schema v2, v3 for remembering what the model has done, v4 for the tidy undo log, v5 to widen it to collections, and v6 to work out
+the duplicate keys again under the wider rules). Before each upgrade Cairn copies
 your library to `cairn.db.v<old version>.bak` in the data folder; v3 also recovers, from earlier runs, which bookmarks the model
 had already handled. *Fetch missing details* now means "no page signals stored yet", so after the upgrade
 it re-reads pages once to learn what tagging needs; lookups that failed are retried on the next run and pages with no cover

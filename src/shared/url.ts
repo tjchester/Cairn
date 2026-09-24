@@ -3,7 +3,28 @@
 const REJECTED_SCHEME = /^(javascript|data|mailto|file|about|chrome|tel|blob|vbscript):/i
 const ANY_SCHEME_WITH_SLASHES = /^[a-z][a-z0-9+.-]*:\/\//i
 const HTTP_SCHEME = /^https?:\/\//i
-const TRACKING_PARAM = /^(utm_[a-z0-9_]+|fbclid|gclid|dclid|msclkid|mc_cid|mc_eid|igshid|_hsenc|_hsmi|ref_src)$/i
+/**
+ * Query parameters that say where a visitor came from rather than which page this is: two links that differ only by
+ * these are the same bookmark. Kept to well-known names, because wrongly treating two pages as one would hide a
+ * bookmark on import. Anything ambiguous (`id`, `src`, `source`, `from`, `page`, `t`, `v`…) is left alone.
+ */
+const TRACKING_PARAM = new RegExp(
+  '^(' +
+    [
+      'utm_[a-z0-9_]+', // Google Analytics and everything that copied it
+      'ref', 'ref_', 'ref_src', 'referrer', 'referer', 'referral', // "you came from here" links (blogs, newsletters)
+      'fbclid', 'gclid', 'gclsrc', 'dclid', 'gbraid', 'wbraid', 'gad_source', 'srsltid', // Google and Meta ad clicks
+      'msclkid', 'yclid', 'twclid', 'ttclid', 'igshid', 'igsh', 'li_fat_id', 'rdt_cid', 'epik', 'scid', // other ad networks
+      'mc_cid', 'mc_eid', 'mkt_tok', '_hsenc', '_hsmi', 'hsctatracking', 'vero_conv', 'vero_id', 'ck_subscriber_id', // mailing lists
+      'oly_enc_id', 'oly_anon_id', '_openstat', 'wickedid', 'ncid', 'cmpid', 'trk', 'trkcampaign', // more campaign tags
+      'pk_campaign', 'pk_kwd', 'pk_source', 'pk_medium', 'piwik_campaign', 'piwik_kwd', 'matomo_campaign', 'matomo_kwd', // Piwik / Matomo
+      'at_medium', 'at_campaign', 's_cid', 'sc_channel', 'sc_campaign', 'soc_src', 'soc_trk', // BBC, Adobe, social shares
+      'si', 'spm', 'scm', 'share_source', 'share_medium', // share links (YouTube, Spotify, Alibaba)
+      '_ga', '_gl', '__s', 'guccounter', 'guce_referrer', 'guce_referrer_sig'
+    ].join('|') +
+    ')$',
+  'i'
+)
 
 /**
  * Turns user input into a valid absolute http(s) URL.
