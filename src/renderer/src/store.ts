@@ -317,7 +317,9 @@ export const useStore = create<Store>((set, get) => {
 
     // ----------------------------------------------------------- selection
     selectOnly(id) {
-      set({ selected: new Set([id]), anchorId: id })
+      // While the details pane is open it follows the selection, so clicking through the list (or moving with the
+      // arrow keys) shows each bookmark in turn. The pane saves whatever was typed before it changes over.
+      set((s) => ({ selected: new Set([id]), anchorId: id, editingId: s.editingId === null ? null : id }))
     },
     toggleSelect(id) {
       set((s) => {

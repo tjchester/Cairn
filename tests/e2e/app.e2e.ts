@@ -165,6 +165,43 @@ describe('Cairn (real app)', () => {
     await expect(editor).toBeHidden()
   })
 
+  it('follows the list while it is open, keeping whatever was typed', async () => {
+    await rows().filter({ hasText: 'MDN Web Docs' }).click()
+    await page.keyboard.press('e')
+    const editor = page.getByRole('complementary', { name: 'Edit bookmark' })
+    const title = editor.getByLabel('Title')
+    const link = editor.locator('input[inputmode="url"]')
+    await expect(title).toHaveValue('MDN Web Docs')
+
+    // Typed but never blurred: clicking another bookmark switches the pane over and keeps the change.
+    await title.fill('MDN Web Docs (renamed)')
+    await rows().filter({ hasText: 'Best pasta recipe' }).click()
+    await expect(title).toHaveValue('Best pasta recipe')
+    await expect(rows().filter({ hasText: 'MDN Web Docs (renamed)' })).toHaveCount(1)
+
+    // The arrow keys move it along the list too (A-Z here, so "Best pasta recipe" is followed by "HN front page").
+    await page.keyboard.press('ArrowDown')
+    await expect(title).toHaveValue('HN front page')
+    await shot('23-editor-follows-list')
+
+    // Closing it with Esc keeps what was typed as well.
+    await editor.getByPlaceholder('Add a private note…').fill('typed, then closed')
+    await page.keyboard.press('Escape')
+    await expect(editor).toBeHidden()
+    const hn = await cairn((api) => api.bookmarks.query({ scope: { kind: 'all' }, search: 'front', sort: 'title', direction: 'asc', limit: 5, offset: 0 }))
+    expect(hn.items[0]).toMatchObject({ title: 'HN front page', note: 'typed, then closed' })
+
+    // ...but a half-typed address is dropped rather than saved over a working link.
+    await rows().filter({ hasText: 'MDN Web Docs (renamed)' }).click()
+    await page.keyboard.press('e')
+    await title.fill('MDN Web Docs') // also puts the name back for the tests that follow
+    await link.fill('not a url')
+    await page.keyboard.press('Escape')
+    await expect(editor).toBeHidden()
+    const mdn = await cairn((api) => api.bookmarks.query({ scope: { kind: 'all' }, search: 'MDN', sort: 'title', direction: 'asc', limit: 5, offset: 0 }))
+    expect(mdn.items[0]).toMatchObject({ title: 'MDN Web Docs', url: 'https://developer.mozilla.org/' })
+  })
+
   it('adds a bookmark through the dialog even when the page cannot be reached', async () => {
     await page.getByRole('button', { name: 'Add' }).click()
     const dialog = page.getByRole('dialog', { name: 'Add bookmark' })

@@ -1,9 +1,24 @@
-import { useState } from 'react'
-import type { Bookmark, TagSuggestion } from '@shared/types'
+import { useEffect, useRef, useState } from 'react'
+import type { Bookmark, BookmarkPatch, TagSuggestion } from '@shared/types'
+import { coerceUrl } from '@shared/url'
 import { Icon } from '../icons'
 import { useStore } from '../store'
 import { formatDateTime } from '../util'
 import { CollectionSelect, Cover, Favicon, TagInput, TagSuggestions } from './ui'
+
+/** The four fields that are typed into; everything else is saved the moment it is changed. */
+type TextFields = Pick<Bookmark, 'title' | 'url' | 'note' | 'excerpt'>
+
+const textOf = (b: TextFields): TextFields => ({ title: b.title, url: b.url, note: b.note, excerpt: b.excerpt })
+
+function isWebUrl(value: string): boolean {
+  try {
+    coerceUrl(value)
+    return true
+  } catch {
+    return false
+  }
+}
 
 export function Editor({ bookmark }: { bookmark: Bookmark }): React.JSX.Element {
   const s = useStore()
@@ -13,6 +28,32 @@ export function Editor({ bookmark }: { bookmark: Bookmark }): React.JSX.Element 
   const [excerpt, setExcerpt] = useState(bookmark.excerpt)
   const [busy, setBusy] = useState(false)
   const inTrash = bookmark.deletedAt !== null
+
+  // The pane follows the list, so it can be replaced at any moment (you click another bookmark, or close it).
+  // `typed` is what is in the boxes now and `saved` is what has already been sent, so the difference between them
+  // is what would otherwise be lost. Normally a click blurs the box first and that saves it; this catches the rest.
+  const typed = useRef<TextFields>({ title, url, note, excerpt })
+  typed.current = { title, url, note, excerpt }
+  const saved = useRef<TextFields>(textOf(bookmark))
+  useEffect(() => {
+    saved.current = textOf(bookmark) // changed elsewhere (our own save coming back, a refresh, a tagging run)
+  }, [bookmark.title, bookmark.url, bookmark.note, bookmark.excerpt])
+
+  const id = bookmark.id
+  useEffect(
+    () => () => {
+      const now = typed.current
+      const before = saved.current
+      const patch: BookmarkPatch = {}
+      if (now.title !== before.title) patch.title = now.title
+      if (now.note !== before.note) patch.note = now.note
+      if (now.excerpt !== before.excerpt) patch.excerpt = now.excerpt
+      // A half-typed address is not a link yet, so it is dropped rather than saved over a working one.
+      if (now.url.trim() !== before.url && isWebUrl(now.url)) patch.url = now.url
+      if (Object.keys(patch).length > 0) void useStore.getState().saveBookmark(id, patch)
+    },
+    [id]
+  )
 
   // Tag suggestions on request (Suggest tags).
   const tagging = s.settings.tagging
@@ -53,14 +94,15 @@ export function Editor({ bookmark }: { bookmark: Bookmark }): React.JSX.Element 
 
   const commitText = async (field: 'title' | 'note' | 'excerpt', value: string): Promise<void> => {
     if (value === bookmark[field]) return
+    saved.current = { ...saved.current, [field]: value }
     await s.saveBookmark(bookmark.id, { [field]: value })
   }
 
   const commitUrl = async (): Promise<void> => {
     if (url.trim() === bookmark.url) return
-    const saved = await s.saveBookmark(bookmark.id, { url })
-    if (saved) setUrl(saved.url)
-    else setUrl(bookmark.url)
+    saved.current = { ...saved.current, url: url.trim() }
+    const result = await s.saveBookmark(bookmark.id, { url })
+    setUrl(result ? result.url : bookmark.url)
   }
 
   const refresh = async (): Promise<void> => {
