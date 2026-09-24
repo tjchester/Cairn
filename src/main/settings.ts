@@ -51,12 +51,17 @@ const simpleSettings = z
     view: z.enum(['list', 'grid', 'headlines']),
     sort: sortKey,
     direction,
-    sidebarWidth: z.number().int().min(180).max(480)
+    sidebarWidth: z.number().int().min(180).max(480),
+    collectionsOpen: z.boolean(),
+    tagsOpen: z.boolean()
   })
   .partial()
   .strict()
 
 const SIMPLE_KEYS = new Set(Object.keys(simpleSettings.shape))
+// Everything is stored as text, so these come back as "260" and "false".
+const NUMBER_KEYS = new Set(['sidebarWidth'])
+const BOOLEAN_KEYS = new Set(['collectionsOpen', 'tagsOpen'])
 
 export const settingsPatchSchema = simpleSettings.extend({ tagging: taggingPatchSchema.optional(), api: apiPatchSchema.optional() }).strict()
 
@@ -79,7 +84,7 @@ export function readSettings(repo: Repo): Settings {
   const raw = repo.getSettingsRaw()
   const flat: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(raw)) {
-    if (SIMPLE_KEYS.has(key)) flat[key] = key === 'sidebarWidth' ? Number(value) : value
+    if (SIMPLE_KEYS.has(key)) flat[key] = NUMBER_KEYS.has(key) ? Number(value) : BOOLEAN_KEYS.has(key) ? value === 'true' : value
   }
   const parsed = simpleSettings.safeParse(flat)
 

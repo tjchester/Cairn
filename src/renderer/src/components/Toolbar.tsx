@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import type { SortKey, ViewMode } from '@shared/types'
 import { Icon, type IconName } from '../icons'
 import { useStore, type ContextItem } from '../store'
-import { buildTree, flattenTree } from '../util'
+import { buildTree, flattenTree } from '@shared/collections'
 
 const VIEWS: { view: ViewMode; icon: IconName; label: string }[] = [
   { view: 'list', icon: 'list', label: 'List' },

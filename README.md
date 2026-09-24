@@ -8,8 +8,9 @@ Raindrop.io. It shares no code or assets with them and is not affiliated with an
 
 ## Features
 
-- **Collections** – nested, colorable, drag-and-drop to reorganize; deleting one sends its bookmarks to the Trash.
-- **Tags** – autocomplete, rename/merge/delete, drag bookmarks onto a tag to apply it.
+- **Collections** – nested and colorable, always listed A–Z; drag one onto another to file it inside, or onto the *Collections* heading to bring it back to the top. Deleting one sends its bookmarks to the Trash.
+- **Tags** – listed A–Z, autocomplete, rename/merge/delete, drag bookmarks onto a tag to apply it.
+- **A sidebar you can fold up** – the *Collections* and *Tags* headings each have an arrow that closes just that list (it says how many it is hiding, and remembers your choice). Hiding the whole sidebar is still `Ctrl/⌘ + B`.
 - **Auto-tagging** – built-in and offline, with an optional local model (see *Auto-tagging* below).
 - **Save from your browser** – a bookmarklet and a local-only API (see *Local API* below): one click sends the page to Cairn, which fetches its details and tags it.
 - **Three layouts** – list, grid and headlines; sort by date added/updated, title or website.

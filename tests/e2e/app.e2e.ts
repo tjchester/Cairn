@@ -612,7 +612,15 @@ describe('Cairn (real app)', () => {
       expect((await cairn((api) => api.data.counts())).all).toBe(before.all)
     } finally {
       await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().filter((w) => w.webContents.getURL().startsWith('http://127.0.0.1')).forEach((w) => w.destroy()))
-      await page.evaluate(() => window.cairn.settings.set({ api: { enabled: false } }))
+      await page.evaluate(async () => {
+        await window.cairn.settings.set({ api: { enabled: false } })
+        const saved = await window.cairn.bookmarks.query({ scope: { kind: 'all' }, search: '127.0.0.1', sort: 'created', direction: 'desc', limit: 50, offset: 0 })
+        const ids = saved.items.map((b) => b.id)
+        if (ids.length > 0) {
+          await window.cairn.bookmarks.trash(ids)
+          await window.cairn.bookmarks.purge(ids) // their cover and icon live on the server that is closing
+        }
+      })
       site.closeAllConnections()
       site.close()
     }
@@ -659,6 +667,55 @@ describe('Cairn (real app)', () => {
     const restored = (await cairn((api) => api.tags.list())).map((t) => t.name)
     expect(restored).toEqual(expect.arrayContaining(['ad-blocker', 'ad-blockers', 'ad-blocking', 'lonely-idea']))
     await page.keyboard.press('Escape')
+  })
+
+  it('lists collections and tags A-Z, and closes each list with its own arrow', async () => {
+    await cairn(async (api) => {
+      const dev = (await api.collections.list()).find((c) => c.name === 'Dev')
+      await api.collections.create({ name: 'zeta' })
+      await api.collections.create({ name: 'Alpha' })
+      if (dev) await api.collections.create({ name: 'Ansible', parentId: dev.id })
+      return true
+    })
+    await page.reload()
+    await page.waitForSelector('.bm')
+
+    // Every level is alphabetical, whatever order they were made in.
+    const tree = page.locator('.nav-section.tree')
+    const names = () => tree.locator('.nav-item .nav-label').allInnerTexts()
+    expect(await names()).toEqual(['Alpha', 'Dev', 'Recipes', 'zeta'])
+    await tree.locator('.nav-item', { hasText: 'Dev' }).first().locator('.twisty').click()
+    expect(await names()).toEqual(['Alpha', 'Dev', 'Ansible', 'Rust', 'Recipes', 'zeta'])
+
+    const tags = page.locator('.nav-section.tags .nav-label')
+    const tagNames = await tags.allInnerTexts()
+    expect(tagNames).toEqual([...tagNames].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })))
+    expect(tagNames.length).toBeGreaterThan(2)
+
+    // Each heading closes its own list; the sidebar itself stays where it is.
+    const collectionsToggle = page.locator('.nav-heading-toggle[aria-controls="nav-collections"]')
+    const tagsToggle = page.locator('.nav-heading-toggle[aria-controls="nav-tags"]')
+    await expect(collectionsToggle).toHaveAttribute('aria-expanded', 'true')
+    await collectionsToggle.click()
+    await tagsToggle.click()
+    await expect(collectionsToggle).toHaveAttribute('aria-expanded', 'false')
+    await expect(tree).toBeHidden()
+    await expect(page.locator('.nav-section.tags')).toBeHidden()
+    await expect(page.locator('.sidebar')).toBeVisible() // not the same as hiding the sidebar
+    await expect(page.locator('.nav-item', { hasText: 'All bookmarks' })).toBeVisible()
+    await shot('22-sidebar-collapsed')
+
+    // ...and it is remembered.
+    await page.reload()
+    await page.waitForSelector('.bm')
+    await expect(collectionsToggle).toHaveAttribute('aria-expanded', 'false')
+    await expect(tree).toBeHidden()
+    await expect(collectionsToggle).toContainText('6') // it says how many it is hiding, sub-collections included
+
+    await collectionsToggle.click()
+    await tagsToggle.click()
+    await expect(page.locator('.nav-section.tree')).toBeVisible()
+    await expect(page.locator('.nav-section.tags')).toBeVisible()
   })
 
   it('has no renderer errors or CSP violations', () => {

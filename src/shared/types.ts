@@ -329,6 +329,10 @@ export interface Settings {
   sort: SortKey
   direction: SortDirection
   sidebarWidth: number
+  /** The sidebar's Collections list is open (its own arrow, not the whole sidebar). */
+  collectionsOpen: boolean
+  /** The sidebar's Tags list is open. */
+  tagsOpen: boolean
   tagging: TaggingSettings
   api: ApiSettings
 }
@@ -344,6 +348,8 @@ export const DEFAULT_SETTINGS: Settings = {
   sort: 'created',
   direction: 'desc',
   sidebarWidth: 260,
+  collectionsOpen: true,
+  tagsOpen: true,
   tagging: DEFAULT_TAGGING,
   api: DEFAULT_API
 }

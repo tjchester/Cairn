@@ -51,6 +51,19 @@ describe('settings', () => {
     expect(readSettings(repo).tagging.maxTags).toBe(5)
   })
 
+  it('remembers which sidebar lists are closed (they are stored as text, and come back as booleans)', () => {
+    const repo = makeRepo()
+    expect(readSettings(repo)).toMatchObject({ collectionsOpen: true, tagsOpen: true })
+
+    applySettingsPatch(repo, { tagsOpen: false, sidebarWidth: 300 })
+    expect(repo.getSettingRaw('tagsOpen')).toBe('false') // stored as text...
+    expect(readSettings(repo)).toMatchObject({ tagsOpen: false, collectionsOpen: true, sidebarWidth: 300, theme: 'system' })
+
+    applySettingsPatch(repo, { collectionsOpen: false })
+    applySettingsPatch(repo, { tagsOpen: true })
+    expect(readSettings(repo)).toMatchObject({ collectionsOpen: false, tagsOpen: true })
+  })
+
   it('survives corrupt stored settings by falling back to the defaults', () => {
     const repo = makeRepo()
     repo.setSettingRaw('tagging', '{ this is not json')

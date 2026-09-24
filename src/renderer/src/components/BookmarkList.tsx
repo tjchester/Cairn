@@ -2,7 +2,8 @@ import { memo, useEffect, useRef, type DragEvent } from 'react'
 import type { Bookmark, ViewMode } from '@shared/types'
 import { Icon } from '../icons'
 import { useStore, type ContextItem } from '../store'
-import { BOOKMARK_DRAG_TYPE, buildTree, flattenTree, formatDate } from '../util'
+import { buildTree, flattenTree } from '@shared/collections'
+import { BOOKMARK_DRAG_TYPE, formatDate } from '../util'
 import { Cover, Favicon } from './ui'
 
 interface RowProps {

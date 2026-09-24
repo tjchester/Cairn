@@ -16,6 +16,7 @@ import {
   type TagInfo
 } from '@shared/types'
 import type { IconName } from './icons'
+import { byName } from '@shared/collections'
 import { errorMessage, sameScope } from './util'
 
 const api = window.cairn
@@ -266,7 +267,8 @@ export const useStore = create<Store>((set, get) => {
         api.tags.list(),
         api.tagging.review.count()
       ])
-      set({ collections, counts, tags, pendingProposals })
+      // A–Z everywhere the tags are shown (the sidebar, the tag picker, the editor).
+      set({ collections, counts, tags: [...tags].sort((a, b) => byName.compare(a.name, b.name)), pendingProposals })
     },
 
     async refreshAll() {

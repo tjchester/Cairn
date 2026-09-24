@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 import type { TagSuggestion } from '@shared/types'
 import { Icon } from '../icons'
 import { useStore } from '../store'
-import { buildTree, flattenTree } from '../util'
+import { buildTree, flattenTree } from '@shared/collections'
 
 // ------------------------------------------------------------------ Modal
 

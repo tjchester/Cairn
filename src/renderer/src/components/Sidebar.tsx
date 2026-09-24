@@ -2,7 +2,8 @@ import { useMemo, useState, type DragEvent, type ReactNode } from 'react'
 import type { Scope } from '@shared/types'
 import { Icon, type IconName } from '../icons'
 import { useStore, type ContextItem } from '../store'
-import { BOOKMARK_DRAG_TYPE, COLLECTION_DRAG_TYPE, COLLECTION_COLORS, buildTree, descendantIds, sameScope, subtreeCounts, type TreeNode } from '../util'
+import { buildTree, descendantIds, subtreeCounts, type TreeNode } from '@shared/collections'
+import { BOOKMARK_DRAG_TYPE, COLLECTION_DRAG_TYPE, COLLECTION_COLORS, sameScope } from '../util'
 
 function readBookmarkIds(event: DragEvent): number[] {
   try {
@@ -69,12 +70,12 @@ function NavItem({ icon, iconColor, label, count, active, depth = 0, dim, onClic
   )
 }
 
-function CollectionNode({ node, depth, siblings, totals }: { node: TreeNode; depth: number; siblings: TreeNode[]; totals: Map<number, number> }) {
+function CollectionNode({ node, depth, totals }: { node: TreeNode; depth: number; totals: Map<number, number> }) {
   const s = useStore()
   const { collection } = node
   const isExpanded = s.expanded[collection.id] ?? false
   const hasChildren = node.children.length > 0
-  const [zone, setZone] = useState<'before' | 'inside' | 'after' | null>(null)
+  const [over, setOver] = useState(false)
   const tree = useMemo(() => buildTree(s.collections), [s.collections])
   const scope: Scope = { kind: 'collection', id: collection.id }
 
@@ -97,12 +98,8 @@ function CollectionNode({ node, depth, siblings, totals }: { node: TreeNode; dep
     s.showContext(e.clientX, e.clientY, items)
   }
 
-  const zoneFor = (e: DragEvent): 'before' | 'inside' | 'after' => {
-    const rect = e.currentTarget.getBoundingClientRect()
-    const y = (e.clientY - rect.top) / rect.height
-    return y < 0.25 ? 'before' : y > 0.75 ? 'after' : 'inside'
-  }
-
+  // Dropping a collection here puts it inside this one; the Collections heading takes it back to the top level.
+  // (The list is sorted A-Z, so there is nothing to reorder by hand.)
   const dropProps: React.HTMLAttributes<HTMLDivElement> = {
     draggable: true,
     onDragStart: (e) => {
@@ -110,41 +107,28 @@ function CollectionNode({ node, depth, siblings, totals }: { node: TreeNode; dep
       e.dataTransfer.effectAllowed = 'move'
     },
     onDragOver: (e) => {
-      if (e.dataTransfer.types.includes(COLLECTION_DRAG_TYPE)) {
-        e.preventDefault()
-        e.dataTransfer.dropEffect = 'move'
-        setZone(zoneFor(e))
-      } else if (e.dataTransfer.types.includes(BOOKMARK_DRAG_TYPE)) {
-        e.preventDefault()
-        e.dataTransfer.dropEffect = 'move'
-        setZone('inside')
-      }
+      if (!e.dataTransfer.types.includes(COLLECTION_DRAG_TYPE) && !e.dataTransfer.types.includes(BOOKMARK_DRAG_TYPE)) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+      setOver(true)
     },
-    onDragLeave: () => setZone(null),
+    onDragLeave: () => setOver(false),
     onDrop: (e) => {
-      const where = zone
-      setZone(null)
+      setOver(false)
       if (e.dataTransfer.types.includes(BOOKMARK_DRAG_TYPE)) {
         e.preventDefault()
         void s.moveToCollection(readBookmarkIds(e), collection.id)
         return
       }
       const draggedId = Number(e.dataTransfer.getData(COLLECTION_DRAG_TYPE))
-      if (!draggedId || draggedId === collection.id || !where) return
+      if (!draggedId || draggedId === collection.id) return
       e.preventDefault()
       e.stopPropagation()
       if (descendantIds(tree, draggedId).has(collection.id)) {
         s.toast('A collection cannot be moved into itself', 'error')
         return
       }
-      if (where === 'inside') {
-        const kids = node.children.filter((c) => c.collection.id !== draggedId).length
-        void s.moveCollection(draggedId, collection.id, kids)
-      } else {
-        const others = siblings.filter((c) => c.collection.id !== draggedId)
-        const at = others.findIndex((c) => c.collection.id === collection.id) + (where === 'after' ? 1 : 0)
-        void s.moveCollection(draggedId, collection.parentId, at)
-      }
+      void s.moveCollection(draggedId, collection.id, node.children.length)
     }
   }
 
@@ -160,7 +144,7 @@ function CollectionNode({ node, depth, siblings, totals }: { node: TreeNode; dep
         onClick={() => s.setScope(scope)}
         onContextMenu={menu}
         dragProps={dropProps}
-        dropClass={zone ? `drop-${zone}` : undefined}
+        dropClass={over ? 'drop-inside' : undefined}
         leading={
           hasChildren ? (
             <button
@@ -172,8 +156,22 @@ function CollectionNode({ node, depth, siblings, totals }: { node: TreeNode; dep
           ) : undefined
         }
       />
-      {isExpanded && node.children.map((child) => <CollectionNode key={child.collection.id} node={child} depth={depth + 1} siblings={node.children} totals={totals} />)}
+      {isExpanded && node.children.map((child) => <CollectionNode key={child.collection.id} node={child} depth={depth + 1} totals={totals} />)}
     </>
+  )
+}
+
+/**
+ * The arrow on a sidebar heading that opens and closes that one list (Collections, Tags). Nothing to do with
+ * hiding the whole sidebar; a closed list shows how many it is hiding.
+ */
+function SectionToggle({ id, label, open, count, onToggle }: { id: string; label: string; open: boolean; count: number; onToggle: () => void }) {
+  return (
+    <button className="nav-heading-toggle" aria-expanded={open} aria-controls={id} title={(open ? 'Hide ' : 'Show ') + label.toLowerCase()} onClick={onToggle}>
+      <span className={`twisty${open ? ' open' : ''}`} aria-hidden="true" />
+      <span>{label}</span>
+      {!open && count > 0 && <span className="nav-heading-count">{count}</span>}
+    </button>
   )
 }
 
@@ -184,6 +182,7 @@ export function Sidebar(): React.JSX.Element {
   const totals = useMemo(() => subtreeCounts(tree, s.counts.byCollection), [tree, s.counts.byCollection])
   const tags = useMemo(() => s.tags.filter((t) => t.name.toLowerCase().includes(tagFilter.trim().toLowerCase())), [s.tags, tagFilter])
   const [rootOver, setRootOver] = useState(false)
+  const { collectionsOpen, tagsOpen } = s.settings
 
   const is = (scope: Scope): boolean => sameScope(s.scope, scope)
 
@@ -212,7 +211,10 @@ export function Sidebar(): React.JSX.Element {
       <div
         className={`nav-heading${rootOver ? ' drop-over' : ''}`}
         onDragOver={(e) => {
-          if (e.dataTransfer.types.includes(COLLECTION_DRAG_TYPE)) (e.preventDefault(), setRootOver(true))
+          if (!e.dataTransfer.types.includes(COLLECTION_DRAG_TYPE)) return
+          e.preventDefault()
+          setRootOver(true)
+          if (!collectionsOpen) void s.updateSettings({ collectionsOpen: true }) // so you can see where it lands
         }}
         onDragLeave={() => setRootOver(false)}
         onDrop={(e) => {
@@ -221,30 +223,37 @@ export function Sidebar(): React.JSX.Element {
           if (id) (e.preventDefault(), void s.moveCollection(id, null, tree.filter((n) => n.collection.id !== id).length))
         }}
       >
-        <span>Collections</span>
-        <button className="icon-btn" onClick={() => void s.createCollection(null)} aria-label="New collection" title="New collection (Ctrl+Shift+N)">
+        <SectionToggle id="nav-collections" label="Collections" open={collectionsOpen} count={s.collections.length} onToggle={() => void s.updateSettings({ collectionsOpen: !collectionsOpen })} />
+        <button
+          className="icon-btn"
+          onClick={() => {
+            if (!collectionsOpen) void s.updateSettings({ collectionsOpen: true })
+            void s.createCollection(null)
+          }}
+          aria-label="New collection"
+          title="New collection (Ctrl+Shift+N)"
+        >
           <Icon name="addFolder" />
         </button>
       </div>
-      <div className="nav-section tree" role="tree">
-        {tree.length === 0 && <p className="nav-empty">No collections yet. Create one to organize your bookmarks.</p>}
-        {tree.map((node) => (
-          <CollectionNode key={node.collection.id} node={node} depth={0} siblings={tree} totals={totals} />
-        ))}
+      {/* Closed lists stay in the page (empty) so the heading's arrow keeps something to point at. */}
+      <div className="nav-section tree" id="nav-collections" role="tree" hidden={!collectionsOpen}>
+        {collectionsOpen && tree.length === 0 && <p className="nav-empty">No collections yet. Create one to organize your bookmarks.</p>}
+        {collectionsOpen && tree.map((node) => <CollectionNode key={node.collection.id} node={node} depth={0} totals={totals} />)}
       </div>
 
       <div className="nav-heading">
-        <span>Tags</span>
+        <SectionToggle id="nav-tags" label="Tags" open={tagsOpen} count={s.tags.length} onToggle={() => void s.updateSettings({ tagsOpen: !tagsOpen })} />
       </div>
-      {s.tags.length > 8 && (
+      {tagsOpen && s.tags.length > 8 && (
         <label className="tag-filter">
           <Icon name="filter" size={12} />
           <input value={tagFilter} onChange={(e) => setTagFilter(e.target.value)} placeholder="Filter tags" aria-label="Filter tags" />
         </label>
       )}
-      <div className="nav-section tags">
-        {s.tags.length === 0 && <p className="nav-empty">Tags you add to bookmarks show up here.</p>}
-        {tags.map((tag) => (
+      <div className="nav-section tags" id="nav-tags" hidden={!tagsOpen}>
+        {tagsOpen && s.tags.length === 0 && <p className="nav-empty">Tags you add to bookmarks show up here.</p>}
+        {(tagsOpen ? tags : []).map((tag) => (
           <NavItem
             key={tag.name}
             icon="tag"

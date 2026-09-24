@@ -315,7 +315,7 @@ input[aria-invalid='true'] {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin: 14px 4px 4px 10px;
+  margin: 14px 4px 4px 4px;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;
@@ -325,6 +325,39 @@ input[aria-invalid='true'] {
 }
 .nav-heading.drop-over {
   background: var(--accent-soft);
+}
+/* The arrow that opens and closes a whole list (Collections, Tags). */
+.nav-heading-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.nav-heading-toggle:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+/* A list closed by its heading arrow (`hidden` alone loses to the flex rule above). */
+.nav-section[hidden] {
+  display: none;
+}
+.nav-heading-count {
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--surface-2);
+  font-weight: 600;
+  letter-spacing: 0;
 }
 .nav-item {
   display: flex;
@@ -349,22 +382,6 @@ input[aria-invalid='true'] {
 .nav-item.drop-inside {
   background: var(--accent-soft);
   outline: 1px dashed var(--accent);
-}
-.nav-item.drop-before::before,
-.nav-item.drop-after::after {
-  content: '';
-  position: absolute;
-  left: 6px;
-  right: 6px;
-  height: 2px;
-  border-radius: 2px;
-  background: var(--accent);
-}
-.nav-item.drop-before::before {
-  top: -1px;
-}
-.nav-item.drop-after::after {
-  bottom: -1px;
 }
 .nav-icon {
   display: inline-grid;
