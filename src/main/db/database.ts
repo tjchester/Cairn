@@ -141,7 +141,13 @@ export const MIGRATIONS: Migration[] = [
   -- Which kind of tidy an entry can put back: 'tags' (merged and removed tags) or 'collections' (empty ones).
   ALTER TABLE tidy_log ADD COLUMN kind TEXT NOT NULL DEFAULT 'tags';
   `,
-  /* v6 */ recomputeUrlKeys
+  /* v6 */ recomputeUrlKeys,
+  /* v7 */ `
+  -- Marks the one collection that is the Archive ('archive'); every other collection has no role. What is kept there
+  -- is left out of the ordinary lists, searches and jobs unless archived items are asked for.
+  ALTER TABLE collections ADD COLUMN role TEXT;
+  CREATE UNIQUE INDEX idx_collections_role ON collections(role) WHERE role IS NOT NULL;
+  `
 ]
 
 /**

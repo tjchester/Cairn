@@ -19,6 +19,8 @@ export interface ImportFolder {
   type: 'folder'
   name: string
   color?: string | null
+  /** Set by a Cairn backup for the folder that was the Archive, so it is restored as the Archive. */
+  role?: 'archive'
   children: ImportNode[]
 }
 
@@ -68,7 +70,8 @@ export function applyImport(repo: Repo, root: ImportFolder, options: { skipDupli
           walk(node, collectionId)
           continue
         }
-        const found = repo.findOrCreateCollection(collectionId, node.name, node.color ?? null)
+        // A backup says which folder was the Archive; restoring one brings that back, unless there is one already.
+        const found = node.role === 'archive' && !repo.archive() ? { id: repo.ensureArchive(node.name).id, created: true } : repo.findOrCreateCollection(collectionId, node.name, node.color ?? null)
         if (found.created) result.collectionsCreated++
         walk(node, found.id)
         continue

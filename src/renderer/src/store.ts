@@ -61,6 +61,8 @@ interface Store {
   tags: TagInfo[]
   scope: Scope
   search: string
+  /** Show what is in the Archive in the ordinary lists as well. Off by default, and not remembered. */
+  includeArchived: boolean
   items: Bookmark[]
   total: number
   loading: boolean
@@ -83,6 +85,12 @@ interface Store {
 
   setScope(scope: Scope): void
   setSearch(text: string): void
+  setIncludeArchived(on: boolean): void
+  /** Sends bookmarks to the Archive (or brings them back), rebuilding the folders they were in. */
+  archiveBookmarks(ids: number[]): Promise<void>
+  restoreBookmarks(ids: number[]): Promise<void>
+  archiveCollection(id: number): Promise<void>
+  restoreCollection(id: number): Promise<void>
   updateSettings(patch: SettingsPatch): Promise<void>
   toggleSidebar(): void
   toggleExpanded(id: number): void
@@ -140,7 +148,7 @@ interface Store {
   dismissToast(id: number): void
 }
 
-const emptyCounts: Counts = { all: 0, unsorted: 0, favorites: 0, broken: 0, trash: 0, byCollection: {} }
+const emptyCounts: Counts = { all: 0, unsorted: 0, favorites: 0, broken: 0, trash: 0, archived: 0, byCollection: {} }
 
 let requestSeq = 0
 let loadingMore = false
@@ -193,6 +201,7 @@ export const useStore = create<Store>((set, get) => {
     tags: [],
     scope: { kind: 'all' },
     search: '',
+    includeArchived: false,
     items: [],
     total: 0,
     loading: false,
@@ -224,7 +233,7 @@ export const useStore = create<Store>((set, get) => {
       const limit = options.keepDepth ? Math.min(MAX_DEPTH, Math.max(PAGE_SIZE, items.length)) : PAGE_SIZE
       set({ loading: true })
       try {
-        const page = await api.bookmarks.query({ scope, search, sort: settings.sort, direction: settings.direction, limit, offset: 0 })
+        const page = await api.bookmarks.query({ scope, search, includeArchived: get().includeArchived, sort: settings.sort, direction: settings.direction, limit, offset: 0 })
         if (seq !== requestSeq) return
         const present = new Set(page.items.map((b) => b.id))
         // Forget bookmarks that have gone, but only when this page is the whole list: a selection may reach past it.
@@ -249,7 +258,7 @@ export const useStore = create<Store>((set, get) => {
       loadingMore = true
       const seq = requestSeq
       try {
-        const page = await api.bookmarks.query({ scope, search, sort: settings.sort, direction: settings.direction, limit: PAGE_SIZE, offset: items.length })
+        const page = await api.bookmarks.query({ scope, search, includeArchived: get().includeArchived, sort: settings.sort, direction: settings.direction, limit: PAGE_SIZE, offset: items.length })
         if (seq !== requestSeq) return
         set((s) => {
           const known = new Set(s.items.map((b) => b.id))
@@ -305,6 +314,52 @@ export const useStore = create<Store>((set, get) => {
       if (patch.sort !== undefined || patch.direction !== undefined) await get().reload()
     },
 
+    setIncludeArchived(on) {
+      set({ includeArchived: on })
+      void get().reload()
+    },
+
+    async archiveBookmarks(ids) {
+      const moved = await guard(() => api.archive.bookmarks(ids))
+      if (moved === undefined) return
+      get().toast(
+        moved === 0 ? 'Already in the Archive' : plural(moved, 'bookmark') + ' sent to the Archive',
+        moved === 0 ? 'info' : 'success',
+        moved > 0 ? { label: 'Undo', onClick: () => void get().restoreBookmarks(ids) } : undefined
+      )
+      set({ selected: new Set() })
+      await get().refreshAll()
+    },
+
+    async restoreBookmarks(ids) {
+      const moved = await guard(() => api.archive.restoreBookmarks(ids))
+      if (moved === undefined) return
+      get().toast(moved === 0 ? 'Nothing to bring back' : plural(moved, 'bookmark') + ' brought back from the Archive', moved === 0 ? 'info' : 'success')
+      set({ selected: new Set() })
+      await get().refreshAll()
+    },
+
+    async archiveCollection(id) {
+      const collection = get().collections.find((c) => c.id === id)
+      const yes = await get().confirm({
+        title: 'Send "' + (collection?.name ?? 'this collection') + '" to the Archive?',
+        message: 'It keeps its bookmarks and sub-collections, and the folders it sits in are rebuilt inside the Archive. It is then left out of searches and exports.',
+        confirmLabel: 'Send to Archive'
+      })
+      if (!yes) return
+      const moved = await guard(() => api.archive.collections([id]))
+      if (moved === undefined) return
+      get().toast(moved > 0 ? 'Sent to the Archive' : 'Already in the Archive', moved > 0 ? 'success' : 'info', moved > 0 ? { label: 'Undo', onClick: () => void get().restoreCollection(id) } : undefined)
+      await get().refreshAll()
+    },
+
+    async restoreCollection(id) {
+      const moved = await guard(() => api.archive.restoreCollections([id]))
+      if (moved === undefined) return
+      get().toast(moved > 0 ? 'Brought back from the Archive' : 'Nothing to bring back', moved > 0 ? 'success' : 'info')
+      await get().refreshAll()
+    },
+
     toggleSidebar() {
       set((s) => ({ sidebarOpen: !s.sidebarOpen }))
     },
@@ -341,8 +396,8 @@ export const useStore = create<Store>((set, get) => {
     },
     async selectAll() {
       // Everything the list is showing, not only the part that has been scrolled into view.
-      const { scope, search } = get()
-      const ids = await guard(() => api.bookmarks.matchingIds({ scope, search }))
+      const { scope, search, includeArchived } = get()
+      const ids = await guard(() => api.bookmarks.matchingIds({ scope, search, includeArchived }))
       set({ selected: new Set(ids ?? get().items.map((b) => b.id)) })
     },
     clearSelection() {
@@ -567,7 +622,16 @@ export const useStore = create<Store>((set, get) => {
     },
 
     async exportFile(format) {
-      const path = await guard(() => api.data.exportFile(format))
+      // A backup always holds everything; the formats meant for another program ask about the Archive first.
+      let includeArchived = false
+      if (format !== 'json' && get().counts.archived > 0) {
+        includeArchived = await get().confirm({
+          title: 'Include archived bookmarks?',
+          message: plural(get().counts.archived, 'bookmark') + ' sit in the Archive. They are left out of this export unless you want them; a JSON backup always holds everything.',
+          confirmLabel: 'Include them'
+        })
+      }
+      const path = await guard(() => api.data.exportFile(format, includeArchived))
       if (path) get().toast(`Exported to ${path}`, 'success')
     },
 

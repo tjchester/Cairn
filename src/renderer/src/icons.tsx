@@ -1,4 +1,5 @@
 import {
+  IconArchive,
   IconAlertCircle,
   IconAlertTriangle,
   IconArrowBackUp,
@@ -95,6 +96,7 @@ const ICONS = {
   undo: IconArrowBackUp,
   web: IconWorld,
   stop: IconPlayerStop,
+  archive: IconArchive,
   sparkles: IconSparkles
 } satisfies Record<string, TablerIcon>
 

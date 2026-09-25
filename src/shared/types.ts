@@ -14,6 +14,8 @@ export interface Collection {
   name: string
   color: string | null
   position: number
+  /** 'archive' for the one collection that holds what you keep but do not use; undefined for every other. */
+  role?: 'archive'
 }
 
 export interface Bookmark {
@@ -76,6 +78,8 @@ export type Scope =
 export interface BookmarkQuery {
   scope: Scope
   search?: string
+  /** Show what is in the Archive as well. Off by default, except when you are looking inside the Archive. */
+  includeArchived?: boolean
   sort: SortKey
   direction: SortDirection
   limit: number
@@ -93,6 +97,8 @@ export interface Counts {
   favorites: number
   broken: number
   trash: number
+  /** Bookmarks kept in the Archive, which the other counts leave out. */
+  archived: number
   byCollection: Record<number, number>
 }
 
@@ -415,7 +421,7 @@ export interface CairnApi {
   bookmarks: {
     query(query: BookmarkQuery): Promise<BookmarkPage>
     /** The ids of every bookmark matching a scope and search, however much of the list has been loaded. */
-    matchingIds(query: { scope: Scope; search?: string }): Promise<number[]>
+    matchingIds(query: { scope: Scope; search?: string; includeArchived?: boolean }): Promise<number[]>
     get(id: number): Promise<Bookmark | null>
     findByUrl(url: string): Promise<Bookmark | null>
     create(input: BookmarkInput): Promise<Bookmark>
@@ -427,6 +433,21 @@ export interface CairnApi {
     purge(ids: number[]): Promise<void>
     emptyTrash(): Promise<number>
     refreshMetadata(id: number): Promise<Bookmark>
+  }
+  /**
+   * The Archive: one collection for what you keep but do not use. It holds sub-collections and bookmarks like any
+   * other, but is left out of the everyday lists, searches, exports and jobs unless archived items are asked for.
+   */
+  archive: {
+    /** The Archive, or null until something is sent to it. */
+    get(): Promise<Collection | null>
+    /** Sends bookmarks there, rebuilding the folders they are in. Returns how many moved. */
+    bookmarks(ids: number[]): Promise<number>
+    /** Brings bookmarks back to the same path outside the Archive. */
+    restoreBookmarks(ids: number[]): Promise<number>
+    /** Sends whole collections there, keeping the path they were filed under. */
+    collections(ids: number[]): Promise<number>
+    restoreCollections(ids: number[]): Promise<number>
   }
   tags: {
     list(): Promise<TagInfo[]>
@@ -452,7 +473,8 @@ export interface CairnApi {
   data: {
     counts(): Promise<Counts>
     importFile(): Promise<ImportResult | null>
-    exportFile(format: ExportFormat): Promise<string | null>
+    /** HTML and CSV leave the Archive out unless `includeArchived`; the JSON backup always holds everything. */
+    exportFile(format: ExportFormat, includeArchived?: boolean): Promise<string | null>
   }
   settings: {
     get(): Promise<Settings>

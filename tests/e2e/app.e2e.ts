@@ -60,7 +60,7 @@ describe('Cairn (real app)', () => {
     expect(isolation.require).toBe('undefined')
     expect(isolation.process).toBe('undefined')
     expect(isolation.ipcRenderer).toBe('undefined')
-    expect(isolation.api).toEqual(['app', 'bookmarks', 'collections', 'data', 'localApi', 'metadata', 'on', 'settings', 'tagging', 'tags', 'tools'])
+    expect(isolation.api).toEqual(['app', 'archive', 'bookmarks', 'collections', 'data', 'localApi', 'metadata', 'on', 'settings', 'tagging', 'tags', 'tools'])
 
     const csp = await page.locator('meta[http-equiv="Content-Security-Policy"]').getAttribute('content')
     expect(csp).toContain("default-src 'none'")
@@ -898,6 +898,67 @@ describe('Cairn (real app)', () => {
     })
     await page.reload()
     await page.waitForSelector('.bm')
+  })
+
+  it('keeps things in the Archive: out of the lists, but filed the way they were', async () => {
+    await cairn(async (api) => {
+      const menus = await api.collections.create({ name: 'Menus' })
+      const college = await api.collections.create({ name: 'College', parentId: menus.id })
+      await api.bookmarks.create({ url: 'https://college.example/dinner-menu', title: 'College dinner menu', collectionId: college.id })
+      return true
+    })
+    await page.reload()
+    await page.waitForSelector('.bm')
+
+    const row = rows().filter({ hasText: 'College dinner menu' })
+    await expect(row).toHaveCount(1)
+    await row.click({ button: 'right' })
+    await page.getByRole('menuitem', { name: 'Send to Archive' }).click()
+    await expect(page.getByText(/sent to the Archive/).last()).toBeVisible()
+    await expect(rows().filter({ hasText: 'College dinner menu' })).toHaveCount(0) // gone from the list
+
+    // It sits at the foot of the sidebar, under the folders it came from.
+    const archive = page.locator('.nav-section.bottom .nav-item', { hasText: 'Archive' })
+    await expect(archive).toBeVisible()
+    await archive.locator('.twisty').click()
+    await expect(page.locator('.nav-section.bottom')).toContainText('Menus')
+    await page.locator('.nav-section.bottom .nav-item', { hasText: 'Menus' }).locator('.twisty').click()
+    await expect(page.locator('.nav-section.bottom')).toContainText('College')
+    await shot('26-archive')
+
+    // The Archive cannot be deleted, though it can be renamed.
+    await archive.click({ button: 'right' })
+    await expect(page.getByRole('menuitem', { name: /Delete collection/ })).toHaveCount(0)
+    await expect(page.getByRole('menuitem', { name: 'Rename…' })).toBeVisible()
+    await page.keyboard.press('Escape')
+
+    // Searching passes it by, unless you ask.
+    const search = page.getByLabel('Search bookmarks')
+    await search.fill('dinner menu')
+    await expect(page.getByText('No matches')).toBeVisible()
+    await search.fill('dinner menu is:archived')
+    await expect(rows()).toHaveCount(1)
+    await search.fill('dinner menu')
+    await page.getByRole('button', { name: 'Include archived bookmarks' }).click()
+    await expect(rows()).toHaveCount(1)
+    await page.getByRole('button', { name: 'Include archived bookmarks' }).click()
+    await expect(page.getByText('No matches')).toBeVisible()
+    await search.fill('')
+
+    // Back out again, to the folders it came from.
+    await page.locator('.nav-section.bottom .nav-item', { hasText: 'College' }).click()
+    await expect(rows()).toHaveCount(1)
+    await rows().first().click({ button: 'right' })
+    await page.getByRole('menuitem', { name: 'Restore from Archive' }).click()
+    await expect(page.getByText(/brought back from the Archive/).last()).toBeVisible()
+
+    await page.locator('.nav-item', { hasText: 'All bookmarks' }).click()
+    const back = await cairn((api) => api.bookmarks.query({ scope: { kind: 'all' }, search: 'dinner menu', sort: 'title', direction: 'asc', limit: 5, offset: 0 }))
+    expect(back.total).toBe(1)
+    const collections = await cairn((api) => api.collections.list())
+    const home = collections.find((c) => c.id === back.items[0]?.collectionId)
+    expect(home?.name).toBe('College')
+    expect(collections.find((c) => c.id === home?.parentId)?.parentId).toBeNull() // Menus, back at the top level
   })
 
   it('has no renderer errors or CSP violations', () => {

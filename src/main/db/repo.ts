@@ -191,14 +191,25 @@ function toBookmark(row: Row): Bookmark {
 }
 
 function toCollection(row: Row): Collection {
-  return {
+  const collection: Collection = {
     id: Number(row.id),
     parentId: row.parent_id === null ? null : Number(row.parent_id),
     name: String(row.name),
     color: (row.color as string | null) ?? null,
     position: Number(row.position)
   }
+  if (row.role === 'archive') collection.role = 'archive'
+  return collection
 }
+
+/** The Archive and everything filed below it, as a sub-query. */
+const ARCHIVE_IDS = `WITH RECURSIVE arc(id) AS (
+    SELECT id FROM collections WHERE role = 'archive'
+    UNION ALL SELECT c.id FROM collections c JOIN arc ON c.parent_id = arc.id
+  ) SELECT id FROM arc`
+
+/** Bookmarks outside the Archive: what the ordinary lists, counts and jobs work on. */
+const NOT_ARCHIVED = `(b.collection_id IS NULL OR b.collection_id NOT IN (${ARCHIVE_IDS}))`
 
 export class Repo {
   private readonly statements = new Map<string, StatementSync>()
@@ -303,7 +314,9 @@ export class Repo {
   }
 
   moveCollection(id: number, parentId: number | null, index: number): void {
-    if (!this.getCollection(id)) throw new Error('Collection not found')
+    const moving = this.getCollection(id)
+    if (!moving) throw new Error('Collection not found')
+    if (moving.role === 'archive' && parentId !== null) throw new Error('The Archive stays at the top level.')
     if (parentId !== null) {
       if (!this.getCollection(parentId)) throw new Error('Target collection not found')
       if (parentId === id || this.descendantIds(id).includes(parentId)) {
@@ -323,7 +336,9 @@ export class Repo {
 
   /** Deletes a collection and its sub-collections. Their bookmarks are moved to the Trash. */
   deleteCollection(id: number): { trashed: number } {
-    if (!this.getCollection(id)) throw new Error('Collection not found')
+    const collection = this.getCollection(id)
+    if (!collection) throw new Error('Collection not found')
+    if (collection.role === 'archive') throw new Error('The Archive cannot be deleted. Empty it instead, or rename it.')
     return this.tx(() => {
       const ids = [id, ...this.descendantIds(id)]
       const now = new Date().toISOString()
@@ -351,7 +366,7 @@ export class Repo {
     }
     const totals = subtreeCounts(buildTree(collections), direct)
     return collections
-      .filter((c) => (totals.get(c.id) ?? 0) === 0)
+      .filter((c) => c.role !== 'archive' && (totals.get(c.id) ?? 0) === 0)
       .map((c) => {
         const parts = this.collectionPath(c.id, collections)
         return { id: c.id, name: c.name, path: parts.join(' / '), depth: parts.length }
@@ -418,6 +433,154 @@ export class Repo {
       }
       this.run('UPDATE tidy_log SET undone = 1 WHERE id = ?', id)
       return { restored }
+    })
+  }
+
+  // ---------------------------------------------------------------- archive
+
+  /** The Archive, if there is one yet. */
+  archive(): Collection | null {
+    const row = this.get("SELECT * FROM collections WHERE role = 'archive'")
+    return row ? toCollection(row) : null
+  }
+
+  /** The Archive, made the first time something is sent to it. Always at the top level. */
+  ensureArchive(name = 'Archive'): Collection {
+    const existing = this.archive()
+    if (existing) return existing
+    return this.tx(() => {
+      const made = this.createCollection({ name })
+      this.run("UPDATE collections SET role = 'archive' WHERE id = ?", made.id)
+      return this.getCollection(made.id) as Collection
+    })
+  }
+
+  /** The Archive and every collection below it. */
+  archivedCollectionIds(): number[] {
+    return this.all(ARCHIVE_IDS).map((r) => Number(r.id))
+  }
+
+  /** Whether a collection is the Archive or sits inside it (null means Unsorted, which never is). */
+  inArchive(collectionId: number | null): boolean {
+    if (collectionId === null) return false
+    return this.get(`SELECT 1 AS x FROM (${ARCHIVE_IDS}) WHERE id = ?`, collectionId) !== undefined
+  }
+
+  /** Finds or makes the path below `parentId`, e.g. ["Menus", "College"] under the Archive. */
+  private ensurePathUnder(parentId: number | null, path: readonly string[]): number | null {
+    let cursor = parentId
+    for (const name of path) {
+      if (!trimTo(name, MAX_NAME)) continue
+      cursor = this.findOrCreateCollection(cursor, name).id
+    }
+    return cursor
+  }
+
+  /**
+   * Moves `sourceId` under `targetParentId`. If a collection of the same name is already there, the two are merged:
+   * the bookmarks and sub-collections move across and the empty original goes.
+   */
+  private mergeUnder(sourceId: number, targetParentId: number | null): number {
+    const source = this.getCollection(sourceId)
+    if (!source) return sourceId
+    const twin = this.get(
+      'SELECT id FROM collections WHERE parent_id IS ? AND name = ? COLLATE NOCASE AND id <> ? LIMIT 1',
+      targetParentId,
+      source.name,
+      sourceId
+    )
+    if (!twin) {
+      const next = Number(this.get('SELECT COALESCE(MAX(position), -1) + 1 AS p FROM collections WHERE parent_id IS ?', targetParentId)?.p ?? 0)
+      this.run('UPDATE collections SET parent_id = ?, position = ?, updated_at = ? WHERE id = ?', targetParentId, next, new Date().toISOString(), sourceId)
+      return sourceId
+    }
+    const keepId = Number(twin.id)
+    for (const child of this.all('SELECT id FROM collections WHERE parent_id = ?', sourceId)) this.mergeUnder(Number(child.id), keepId)
+    this.run('UPDATE bookmarks SET collection_id = ? WHERE collection_id = ?', keepId, sourceId)
+    this.run('DELETE FROM collections WHERE id = ?', sourceId)
+    return keepId
+  }
+
+  /** Where a bookmark or collection would land in the Archive: the same path it has now, made if need be. */
+  private archiveTargetFor(collectionId: number | null, archiveId: number): number | null {
+    if (collectionId === null) return archiveId
+    return this.ensurePathUnder(archiveId, this.collectionPath(collectionId))
+  }
+
+  /**
+   * Sends bookmarks to the Archive, rebuilding the folders they are in: one from "Menus / College" lands in
+   * "Archive / Menus / College". Suggestions waiting on them are dropped, since they are out of the way now.
+   */
+  archiveBookmarks(ids: number[]): { moved: number } {
+    if (ids.length === 0) return { moved: 0 }
+    return this.tx(() => {
+      const archiveId = this.ensureArchive().id
+      let moved = 0
+      const targets = new Map<number | null, number | null>()
+      for (const id of ids) {
+        const bookmark = this.getBookmark(id)
+        if (!bookmark || this.inArchive(bookmark.collectionId)) continue
+        if (!targets.has(bookmark.collectionId)) targets.set(bookmark.collectionId, this.archiveTargetFor(bookmark.collectionId, archiveId))
+        this.updateBookmark(id, { collectionId: targets.get(bookmark.collectionId) ?? archiveId })
+        this.run("UPDATE tag_proposals SET status = 'rejected' WHERE bookmark_id = ? AND status IN ('pending', 'held')", id)
+        moved++
+      }
+      return { moved }
+    })
+  }
+
+  /** Brings bookmarks back out, to the same path in the live tree (the Archive's own root means Unsorted). */
+  restoreBookmarks(ids: number[]): { moved: number } {
+    if (ids.length === 0) return { moved: 0 }
+    return this.tx(() => {
+      const archiveId = this.archive()?.id ?? null
+      if (archiveId === null) return { moved: 0 }
+      let moved = 0
+      const targets = new Map<number, number | null>()
+      for (const id of ids) {
+        const bookmark = this.getBookmark(id)
+        if (!bookmark || bookmark.collectionId === null || !this.inArchive(bookmark.collectionId)) continue
+        if (!targets.has(bookmark.collectionId)) {
+          const path = this.collectionPath(bookmark.collectionId).slice(1) // drop the Archive's own name
+          targets.set(bookmark.collectionId, path.length === 0 ? null : this.ensureCollectionPath(path))
+        }
+        this.updateBookmark(id, { collectionId: targets.get(bookmark.collectionId) ?? null })
+        moved++
+      }
+      return { moved }
+    })
+  }
+
+  /** Sends whole collections to the Archive, keeping the path they were filed under. */
+  archiveCollections(ids: number[]): { moved: number } {
+    if (ids.length === 0) return { moved: 0 }
+    return this.tx(() => {
+      const archiveId = this.ensureArchive().id
+      let moved = 0
+      for (const id of ids) {
+        const collection = this.getCollection(id)
+        if (!collection || collection.role === 'archive' || this.inArchive(id)) continue
+        const parentPath = collection.parentId === null ? [] : this.collectionPath(collection.parentId)
+        this.mergeUnder(id, this.ensurePathUnder(archiveId, parentPath))
+        moved++
+      }
+      return { moved }
+    })
+  }
+
+  /** Brings whole collections back out of the Archive, to the path they were kept under. */
+  restoreCollections(ids: number[]): { moved: number } {
+    if (ids.length === 0) return { moved: 0 }
+    return this.tx(() => {
+      let moved = 0
+      for (const id of ids) {
+        const collection = this.getCollection(id)
+        if (!collection || collection.role === 'archive' || !this.inArchive(id)) continue
+        const parentPath = collection.parentId === null ? [] : this.collectionPath(collection.parentId).slice(1)
+        this.mergeUnder(id, parentPath.length === 0 ? null : this.ensureCollectionPath(parentPath))
+        moved++
+      }
+      return { moved }
     })
   }
 
@@ -622,14 +785,21 @@ export class Repo {
   // ------------------------------------------------------------------- query
 
   /** The WHERE clause (and its parameters) for a scope and search box: what "the list you are looking at" means. */
-  private filterFor(q: { scope: Scope; search?: string }): { where: string; params: SqlValue[] } {
+  private filterFor(q: { scope: Scope; search?: string; includeArchived?: boolean }): { where: string; params: SqlValue[] } {
     const clauses: string[] = []
     const params: SqlValue[] = []
     this.applyScope(q.scope, clauses, params)
 
-    const search = buildSearchClauses(parseSearch(q.search ?? ''))
+    const parsed = parseSearch(q.search ?? '')
+    const search = buildSearchClauses(parsed)
     clauses.push(...search.clauses)
     params.push(...search.params)
+
+    // What is in the Archive stays out of the way, unless you ask for it, search for it, or are looking inside it.
+    // The Trash is the one exception: it shows everything you deleted, wherever it was kept.
+    const lookingInside = q.scope.kind === 'trash' || (q.scope.kind === 'collection' && this.inArchive(q.scope.id))
+    if (parsed.archived) clauses.push(`b.collection_id IN (${ARCHIVE_IDS})`)
+    else if (!q.includeArchived && !lookingInside) clauses.push(NOT_ARCHIVED)
     return { where: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '', params }
   }
 
@@ -637,7 +807,7 @@ export class Repo {
    * Every bookmark the current list would show, however far it has been scrolled: what "select all" means.
    * Ids only, so a selection of thousands costs little.
    */
-  matchingIds(q: { scope: Scope; search?: string }, limit = 200_000): number[] {
+  matchingIds(q: { scope: Scope; search?: string; includeArchived?: boolean }, limit = 200_000): number[] {
     const { where, params } = this.filterFor(q)
     return this.all(`SELECT b.id FROM bookmarks b ${where} ORDER BY b.id LIMIT ?`, ...params, Math.max(1, limit)).map((r) => Number(r.id))
   }
@@ -693,12 +863,13 @@ export class Repo {
   counts(): Counts {
     const totals = this.get(
       `SELECT
-         COALESCE(SUM(deleted_at IS NULL), 0)                          AS total,
-         COALESCE(SUM(deleted_at IS NULL AND collection_id IS NULL), 0) AS unsorted,
-         COALESCE(SUM(deleted_at IS NULL AND favorite = 1), 0)          AS favorites,
-         COALESCE(SUM(deleted_at IS NULL AND status = 'broken'), 0)     AS broken,
-         COALESCE(SUM(deleted_at IS NOT NULL), 0)                       AS trash
-       FROM bookmarks`
+         COALESCE(SUM(deleted_at IS NULL AND ${NOT_ARCHIVED}), 0)                          AS total,
+         COALESCE(SUM(deleted_at IS NULL AND collection_id IS NULL), 0)                    AS unsorted,
+         COALESCE(SUM(deleted_at IS NULL AND favorite = 1 AND ${NOT_ARCHIVED}), 0)         AS favorites,
+         COALESCE(SUM(deleted_at IS NULL AND status = 'broken' AND ${NOT_ARCHIVED}), 0)    AS broken,
+         COALESCE(SUM(deleted_at IS NOT NULL), 0)                                          AS trash,
+         COALESCE(SUM(deleted_at IS NULL AND NOT ${NOT_ARCHIVED}), 0)                      AS archived
+       FROM bookmarks b`
     ) as Row
     const byCollection: Record<number, number> = {}
     for (const row of this.all(
@@ -712,6 +883,7 @@ export class Repo {
       favorites: Number(totals.favorites),
       broken: Number(totals.broken),
       trash: Number(totals.trash),
+      archived: Number(totals.archived),
       byCollection
     }
   }
@@ -765,7 +937,7 @@ export class Repo {
          FROM tags t
          JOIN bookmark_tags bt ON bt.tag_id = t.id
          JOIN bookmarks b ON b.id = bt.bookmark_id
-        WHERE b.deleted_at IS NULL
+        WHERE b.deleted_at IS NULL AND ${NOT_ARCHIVED}
         GROUP BY t.id
         ORDER BY t.name COLLATE NOCASE`
     ).map((r) => ({ name: String(r.name), count: Number(r.n) }))
@@ -818,7 +990,7 @@ export class Repo {
          FROM tags t
          JOIN bookmark_tags bt ON bt.tag_id = t.id
          JOIN bookmarks b ON b.id = bt.bookmark_id
-        WHERE b.deleted_at IS NULL
+        WHERE b.deleted_at IS NULL AND ${NOT_ARCHIVED}
         GROUP BY t.id
         ORDER BY t.name COLLATE NOCASE`
     ).map((r) => ({ name: String(r.name), uses: Number(r.uses), userUses: Number(r.user_uses) }))
@@ -830,7 +1002,7 @@ export class Repo {
     for (const r of this.all(
       `SELECT bt.bookmark_id AS id, t.name AS name
          FROM bookmark_tags bt JOIN tags t ON t.id = bt.tag_id JOIN bookmarks b ON b.id = bt.bookmark_id
-        WHERE b.deleted_at IS NULL`
+        WHERE b.deleted_at IS NULL AND ${NOT_ARCHIVED}`
     )) {
       const id = Number(r.id)
       const list = map.get(id)
@@ -1039,10 +1211,10 @@ export class Repo {
   /** Groups of active bookmarks that point at the same (normalised) URL. */
   findDuplicateGroups(): Bookmark[][] {
     const keys = this.all(
-      'SELECT url_key FROM bookmarks WHERE deleted_at IS NULL GROUP BY url_key HAVING COUNT(*) > 1 ORDER BY url_key'
+      `SELECT url_key FROM bookmarks b WHERE deleted_at IS NULL AND ${NOT_ARCHIVED} GROUP BY url_key HAVING COUNT(*) > 1 ORDER BY url_key`
     ).map((r) => String(r.url_key))
     return keys.map((key) =>
-      this.all(`${BOOKMARK_SELECT} WHERE b.url_key = ? AND b.deleted_at IS NULL ORDER BY b.created_at, b.id`, key).map(toBookmark)
+      this.all(`${BOOKMARK_SELECT} WHERE b.url_key = ? AND b.deleted_at IS NULL AND ${NOT_ARCHIVED} ORDER BY b.created_at, b.id`, key).map(toBookmark)
     )
   }
 
@@ -1053,14 +1225,16 @@ export class Repo {
    */
   listForJob(kind: 'all' | 'missing-metadata'): { id: number; url: string }[] {
     const extra = kind === 'missing-metadata' ? 'AND signals IS NULL' : ''
-    return this.all(`SELECT id, url FROM bookmarks WHERE deleted_at IS NULL ${extra} ORDER BY id`).map((r) => ({
+    return this.all(`SELECT b.id, b.url FROM bookmarks b WHERE deleted_at IS NULL AND ${NOT_ARCHIVED} ${extra} ORDER BY id`).map((r) => ({
       id: Number(r.id),
       url: String(r.url)
     }))
   }
 
-  allActiveBookmarks(): Bookmark[] {
-    return this.all(`${BOOKMARK_SELECT} WHERE b.deleted_at IS NULL ORDER BY b.id`).map(toBookmark)
+  /** Every bookmark that is not in the Trash. `includeArchived` is for backups, which must hold everything. */
+  allActiveBookmarks(includeArchived = true): Bookmark[] {
+    const where = includeArchived ? '' : ` AND ${NOT_ARCHIVED}`
+    return this.all(`${BOOKMARK_SELECT} WHERE b.deleted_at IS NULL${where} ORDER BY b.id`).map(toBookmark)
   }
 
   // ------------------------------------------------------------- auto-tagging
@@ -1096,7 +1270,7 @@ export class Repo {
 
   /** The conditions that pick the bookmarks a tagging run looks at. */
   private taggingFilter(scope: 'untagged' | 'all' | 'ids', options: { skipLlmSeen?: boolean }): string {
-    const parts = ['b.deleted_at IS NULL']
+    const parts = ['b.deleted_at IS NULL', NOT_ARCHIVED]
     if (scope === 'untagged') parts.push('NOT EXISTS (SELECT 1 FROM bookmark_tags x WHERE x.bookmark_id = b.id)')
     // A long run with the (slow) local model can be stopped and continued: what the model has handled is skipped.
     if (options.skipLlmSeen) parts.push('NOT EXISTS (SELECT 1 FROM llm_seen s WHERE s.bookmark_id = b.id)')

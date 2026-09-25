@@ -34,17 +34,18 @@ export function importText(repo: Repo, fileName: string, content: string): Apply
   return applyImport(repo, tree, { skipDuplicates: true })
 }
 
-export function exportText(repo: Repo, format: ExportFormat): string {
+/**
+ * A backup (JSON) always holds everything, the Archive included: a backup that quietly leaves bookmarks out is not a
+ * backup. The formats meant for another program (HTML, CSV) leave the Archive out unless it is asked for.
+ */
+export function exportText(repo: Repo, format: ExportFormat, options: { includeArchived?: boolean } = {}): string {
   const collections = repo.listCollections()
-  const bookmarks = repo.allActiveBookmarks()
-  switch (format) {
-    case 'html':
-      return serializeNetscape(collections, bookmarks)
-    case 'csv':
-      return serializeCsv(collections, bookmarks)
-    case 'json':
-      return serializeJson(collections, bookmarks)
-  }
+  if (format === 'json') return serializeJson(collections, repo.allActiveBookmarks(), repo.archive())
+
+  const archived = new Set(options.includeArchived ? [] : repo.archivedCollectionIds())
+  const bookmarks = repo.allActiveBookmarks().filter((b) => b.collectionId === null || !archived.has(b.collectionId))
+  const kept = collections.filter((c) => !archived.has(c.id))
+  return format === 'html' ? serializeNetscape(kept, bookmarks) : serializeCsv(kept, bookmarks)
 }
 
 export const EXPORT_EXTENSIONS: Record<ExportFormat, { name: string; extension: string }> = {

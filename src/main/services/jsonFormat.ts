@@ -8,6 +8,8 @@ import { ensureFolderPath, insertAtPath, newFolder, newLink, toIsoDate, type Imp
 const fileSchema = z.object({
   app: z.string().optional(),
   version: z.number().optional(),
+  /** The path of the Archive collection, so restoring a backup brings it back as the Archive. */
+  archivePath: z.array(z.string()).optional(),
   collections: z
     .array(z.object({ path: z.array(z.string()), color: z.string().nullish() }))
     .default([]),
@@ -28,7 +30,7 @@ const fileSchema = z.object({
     .default([])
 })
 
-export function serializeJson(collections: Collection[], bookmarks: Bookmark[]): string {
+export function serializeJson(collections: Collection[], bookmarks: Bookmark[], archive: Collection | null = null): string {
   const byId = new Map(collections.map((c) => [c.id, c]))
   const pathOf = (id: number | null): string[] => {
     const parts: string[] = []
@@ -47,6 +49,7 @@ export function serializeJson(collections: Collection[], bookmarks: Bookmark[]):
       app: 'cairn',
       version: 1,
       exportedAt: new Date().toISOString(),
+      ...(archive ? { archivePath: pathOf(archive.id) } : {}),
       collections: collections.map((c) => ({ path: pathOf(c.id), color: c.color })),
       bookmarks: bookmarks.map((b) => ({
         url: b.url,
@@ -81,6 +84,8 @@ export function parseJsonBookmarks(text: string): ImportFolder {
     const folder = ensureFolderPath(root, c.path)
     if (c.color) folder.color = c.color
   }
+  const archivePath = parsed.data.archivePath
+  if (archivePath && archivePath.length > 0) ensureFolderPath(root, archivePath).role = 'archive'
   for (const b of parsed.data.bookmarks) {
     insertAtPath(
       root,

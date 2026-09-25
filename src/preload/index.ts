@@ -34,6 +34,13 @@ const api: CairnApi = {
     emptyTrash: () => invoke('bookmarks:emptyTrash'),
     refreshMetadata: (id) => invoke('bookmarks:refreshMetadata', id)
   },
+  archive: {
+    get: () => invoke('archive:get'),
+    bookmarks: (bookmarkIds) => invoke('archive:bookmarks', bookmarkIds),
+    restoreBookmarks: (bookmarkIds) => invoke('archive:restoreBookmarks', bookmarkIds),
+    collections: (collectionIds) => invoke('archive:collections', collectionIds),
+    restoreCollections: (collectionIds) => invoke('archive:restoreCollections', collectionIds)
+  },
   tags: {
     list: () => invoke('tags:list'),
     rename: (from, to) => invoke('tags:rename', from, to),
@@ -54,7 +61,7 @@ const api: CairnApi = {
   data: {
     counts: () => invoke('data:counts'),
     importFile: () => invoke('data:import'),
-    exportFile: (format) => invoke('data:export', format)
+    exportFile: (format, includeArchived) => invoke('data:export', format, includeArchived)
   },
   settings: {
     get: () => invoke('settings:get'),

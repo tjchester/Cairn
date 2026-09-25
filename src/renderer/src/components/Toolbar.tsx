@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import type { SortKey, ViewMode } from '@shared/types'
 import { Icon, type IconName } from '../icons'
 import { useStore, type ContextItem } from '../store'
-import { buildTree, flattenTree } from '@shared/collections'
+import { archivedCollectionIds, buildTree, flattenTree } from '@shared/collections'
 
 const VIEWS: { view: ViewMode; icon: IconName; label: string }[] = [
   { view: 'list', icon: 'list', label: 'List' },
@@ -82,6 +82,16 @@ export function Toolbar({ searchRef }: { searchRef: React.RefObject<HTMLInputEle
           </button>
         )}
 
+        <button
+          className={'icon-btn' + (s.includeArchived ? ' on' : '')}
+          aria-pressed={s.includeArchived}
+          title={s.includeArchived ? 'Hide archived bookmarks' : 'Include archived bookmarks'}
+          aria-label="Include archived bookmarks"
+          onClick={() => s.setIncludeArchived(!s.includeArchived)}
+        >
+          <Icon name="archive" />
+        </button>
+
         <div className="sort">
           <select value={sort} onChange={(e) => void s.updateSettings({ sort: e.target.value as SortKey })} aria-label="Sort by">
             {SORTS.map((o) => (
@@ -129,6 +139,8 @@ export function BulkBar(): React.JSX.Element | null {
   const options = useMemo(() => flattenTree(buildTree(s.collections)), [s.collections])
   if (ids.length < 2) return null
   const inTrash = s.scope.kind === 'trash'
+  // Looking inside the Archive, the action is to bring things back out.
+  const archived = s.scope.kind === 'collection' && archivedCollectionIds(s.collections).has(s.scope.id)
 
   const openMoveMenu = (e: React.MouseEvent): void => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
@@ -172,6 +184,9 @@ export function BulkBar(): React.JSX.Element | null {
           </button>
           <button className="btn" onClick={() => void s.toggleFavorite(ids)}>
             <Icon name="favorite" /> Favorite
+          </button>
+          <button className="btn" onClick={() => void (archived ? s.restoreBookmarks(ids) : s.archiveBookmarks(ids))} title={archived ? 'Put them back where they came from' : 'Keep them, out of searches and exports'}>
+            <Icon name="archive" /> {archived ? 'Restore' : 'Archive'}
           </button>
           <button className="btn danger-text" onClick={() => void s.trashIds(ids)}>
             <Icon name="trash" /> Trash

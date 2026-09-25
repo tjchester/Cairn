@@ -11,6 +11,7 @@ Raindrop.io. It shares no code or assets with them and is not affiliated with an
 - **Collections** – nested and colorable, always listed A–Z; drag one onto another to file it inside, or onto the *Collections* heading to bring it back to the top. Deleting one sends its bookmarks to the Trash, and *Tools → Tidy collections* clears out the ones holding no bookmarks at all (it shows what would go, and can be undone).
 - **Tags** – listed A–Z, autocomplete, rename/merge/delete, drag bookmarks onto a tag to apply it.
 - **A sidebar you can fold up** – the *Collections* and *Tags* headings each have an arrow that closes just that list (it says how many it is hiding, and remembers your choice). Hiding the whole sidebar is still `Ctrl/⌘ + B`.
+- **Archive** – one collection for what you keep but no longer use; it stays out of your way (see *The Archive* below).
 - **Auto-tagging** – built-in and offline, with an optional local model (see *Auto-tagging* below).
 - **Save from your browser** – a bookmarklet and a local-only API (see *Local API* below): one click sends the page to Cairn, which fetches its details and tags it.
 - **Three layouts** – list, grid and headlines; sort by date added/updated, title or website.
@@ -24,6 +25,7 @@ Raindrop.io. It shares no code or assets with them and is not affiliated with an
   | `#tag` or `#"two words"` | has tag |
   | `site:github.com` | website (and its subdomains) |
   | `is:favorite` `is:broken` `is:unsorted` | state filters |
+  | `is:archived` | look inside the Archive (otherwise left out) |
   | `has:note` `has:cover` | has a note / preview image |
 
 - **Fast capture** – paste a URL anywhere in the window, drag a link in from your browser, or use *New Bookmark*.
@@ -122,6 +124,25 @@ Visiting thousands of sites is where things go wrong, so the jobs are built to c
 - **"Broken" means broken** – only a 404/410-style answer, or a host that doesn't exist / refuses connections on every
   attempt *while the internet is confirmed to be working*. Timeouts, TLS problems and rate limits never mark a link broken.
 
+## The Archive
+
+A place for bookmarks you are keeping for good but no longer refer to. **Send to Archive** appears on a bookmark's
+right-click menu, on the bulk bar, in the editor and on a collection's menu; you can also drag bookmarks onto the
+Archive itself. It is made the first time you use it and sits at the foot of the sidebar, below your collections.
+
+- **Your filing is kept.** Archiving a bookmark from *Menus / College* puts it in *Archive / Menus / College*, making
+  those folders in the Archive if they are not there yet and merging with them if they are. **Restore from Archive**
+  puts things back where they came from, rebuilding the path in the same way.
+- **It stays out of the way.** Archived bookmarks are left out of the lists, searches, counts, the tag list, the
+  duplicate finder, *Check links*, *Fetch missing details* and auto-tagging. They appear when you look inside the
+  Archive, search `is:archived`, or press the archive button beside the search box.
+- **The Trash is the exception:** it shows everything you deleted, wherever it was kept.
+- **Exports** leave the Archive out unless you say otherwise (Cairn asks). A **JSON backup always holds everything**,
+  archive and all, and restoring one brings the Archive back as the Archive.
+- **It behaves like any other collection** otherwise: sub-collections, colours, drag and drop, renaming (call it
+  *Attic* if you like). It cannot be deleted or filed inside another collection, and *Tidy collections* never removes
+  it, though it will tidy empty folders inside it.
+
 ## Auto-tagging
 
 Cairn can suggest tags for a bookmark. It works with any library: nothing is tuned to one person's bookmarks.
@@ -189,8 +210,8 @@ Models like to invent look-alike and one-off tags, so Cairn works against that:
 
 ### Data notes
 
-Auto-tagging needed database upgrades (schema v2, v3 for remembering what the model has done, v4 for the tidy undo log, v5 to widen it to collections, and v6 to work out
-the duplicate keys again under the wider rules). Before each upgrade Cairn copies
+Auto-tagging needed database upgrades (schema v2, v3 for remembering what the model has done, v4 for the tidy undo log, v5 to widen it to collections, v6 to work out
+the duplicate keys again under the wider rules, and v7 for the Archive). Before each upgrade Cairn copies
 your library to `cairn.db.v<old version>.bak` in the data folder; v3 also recovers, from earlier runs, which bookmarks the model
 had already handled. *Fetch missing details* now means "no page signals stored yet", so after the upgrade
 it re-reads pages once to learn what tagging needs; lookups that failed are retried on the next run and pages with no cover

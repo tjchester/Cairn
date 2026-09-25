@@ -41,6 +41,7 @@ const direction = z.enum(['asc', 'desc'])
 const query = z.object({
   scope,
   search: text(500).optional(),
+  includeArchived: z.boolean().optional(),
   sort: sortKey,
   direction,
   limit: z.number().int().min(1).max(1000),
@@ -154,9 +155,16 @@ export function registerIpc(ctx: IpcContext): void {
   )
   handle('collections:remove', z.tuple([id]), ([collectionId]) => repo.deleteCollection(collectionId))
 
+  // the Archive: what you keep but do not use
+  handle('archive:get', noArgs, () => repo.archive())
+  handle('archive:bookmarks', z.tuple([ids]), ([bookmarkIds]) => repo.archiveBookmarks(bookmarkIds).moved)
+  handle('archive:restoreBookmarks', z.tuple([ids]), ([bookmarkIds]) => repo.restoreBookmarks(bookmarkIds).moved)
+  handle('archive:collections', z.tuple([ids]), ([collectionIds]) => repo.archiveCollections(collectionIds).moved)
+  handle('archive:restoreCollections', z.tuple([ids]), ([collectionIds]) => repo.restoreCollections(collectionIds).moved)
+
   // bookmarks
   handle('bookmarks:query', z.tuple([query]), ([q]) => repo.query(q))
-  handle('bookmarks:matchingIds', z.tuple([z.object({ scope, search: text(500).optional() })]), ([q]) => repo.matchingIds(q))
+  handle('bookmarks:matchingIds', z.tuple([z.object({ scope, search: text(500).optional(), includeArchived: z.boolean().optional() })]), ([q]) => repo.matchingIds(q))
   handle('bookmarks:get', z.tuple([id]), ([bookmarkId]) => repo.getBookmark(bookmarkId))
   handle('bookmarks:findByUrl', z.tuple([text(4096)]), ([url]) => repo.findByUrl(url))
   handle('bookmarks:create', z.tuple([bookmarkInput]), ([input]) => repo.createBookmark(input))
@@ -221,7 +229,7 @@ export function registerIpc(ctx: IpcContext): void {
     const fileName = basename(file)
     return { ...importText(repo, fileName, content), fileName }
   })
-  handle('data:export', z.tuple([z.enum(['html', 'csv', 'json'])]), async ([format]) => {
+  handle('data:export', z.tuple([z.enum(['html', 'csv', 'json']), z.boolean().optional()]), async ([format, includeArchived]) => {
     const win = ctx.getWindow()
     const { name, extension } = EXPORT_EXTENSIONS[format]
     const stamp = new Date().toISOString().slice(0, 10)
@@ -232,7 +240,7 @@ export function registerIpc(ctx: IpcContext): void {
     }
     const picked = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
     if (picked.canceled || !picked.filePath) return null
-    await writeFile(picked.filePath, exportText(repo, format), 'utf8')
+    await writeFile(picked.filePath, exportText(repo, format, { includeArchived }), 'utf8')
     return picked.filePath
   })
 

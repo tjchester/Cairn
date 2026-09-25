@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Bookmark, BookmarkPatch, TagSuggestion } from '@shared/types'
+import { archivedCollectionIds } from '@shared/collections'
 import { coerceUrl } from '@shared/url'
 import { Icon } from '../icons'
 import { useStore } from '../store'
@@ -28,6 +29,7 @@ export function Editor({ bookmark }: { bookmark: Bookmark }): React.JSX.Element 
   const [excerpt, setExcerpt] = useState(bookmark.excerpt)
   const [busy, setBusy] = useState(false)
   const inTrash = bookmark.deletedAt !== null
+  const archived = bookmark.collectionId !== null && archivedCollectionIds(s.collections).has(bookmark.collectionId)
 
   // The pane follows the list, so it can be replaced at any moment (you click another bookmark, or close it).
   // `typed` is what is in the boxes now and `saved` is what has already been sent, so the difference between them
@@ -224,6 +226,13 @@ export function Editor({ bookmark }: { bookmark: Bookmark }): React.JSX.Element 
             </button>
             <button className="btn" onClick={() => void s.copyLink(bookmark)}>
               <Icon name="copy" /> Copy
+            </button>
+            <button
+              className="btn"
+              onClick={() => void (archived ? s.restoreBookmarks([bookmark.id]) : s.archiveBookmarks([bookmark.id]))}
+              title={archived ? 'Put it back where it came from' : 'Keep it, out of searches and exports'}
+            >
+              <Icon name="archive" /> {archived ? 'Restore' : 'Archive'}
             </button>
             <button className="btn" onClick={() => void refresh()} disabled={busy} title="Fetch title, description and images again">
               <Icon name="refresh" /> {busy ? 'Fetching…' : 'Refresh'}

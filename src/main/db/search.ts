@@ -5,7 +5,7 @@
 //   -word            exclude
 //   #tag  #"a tag"   has tag
 //   site:example.com domain (and its subdomains)
-//   is:favorite      is:broken   is:unsorted
+//   is:favorite      is:broken   is:unsorted   is:archived
 //   has:note         has:cover
 
 export interface ParsedSearch {
@@ -16,6 +16,8 @@ export interface ParsedSearch {
   favorite: boolean
   broken: boolean
   unsorted: boolean
+  /** Look in the Archive (which is otherwise left out). */
+  archived: boolean
   hasNote: boolean
   hasCover: boolean
 }
@@ -52,6 +54,7 @@ export function parseSearch(input: string): ParsedSearch {
     favorite: false,
     broken: false,
     unsorted: false,
+    archived: false,
     hasNote: false,
     hasCover: false
   }
@@ -69,6 +72,8 @@ export function parseSearch(input: string): ParsedSearch {
       parsed.broken = true
     } else if (lower === 'is:unsorted') {
       parsed.unsorted = true
+    } else if (lower === 'is:archived' || lower === 'is:archive') {
+      parsed.archived = true
     } else if (lower === 'has:note') {
       parsed.hasNote = true
     } else if (lower === 'has:cover') {

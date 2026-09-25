@@ -70,7 +70,7 @@ function NavItem({ icon, iconColor, label, count, active, depth = 0, dim, onClic
   )
 }
 
-function CollectionNode({ node, depth, totals }: { node: TreeNode; depth: number; totals: Map<number, number> }) {
+function CollectionNode({ node, depth, totals, inArchive = false }: { node: TreeNode; depth: number; totals: Map<number, number>; inArchive?: boolean }) {
   const s = useStore()
   const { collection } = node
   const isExpanded = s.expanded[collection.id] ?? false
@@ -78,12 +78,20 @@ function CollectionNode({ node, depth, totals }: { node: TreeNode; depth: number
   const [over, setOver] = useState(false)
   const tree = useMemo(() => buildTree(s.collections), [s.collections])
   const scope: Scope = { kind: 'collection', id: collection.id }
+  const isArchive = collection.role === 'archive'
 
   const menu = (e: React.MouseEvent): void => {
     e.preventDefault()
     const items: ContextItem[] = [
       { label: 'New sub-collection…', icon: 'addFolder', onClick: () => void s.createCollection(collection.id) },
       { label: 'Rename…', icon: 'edit', onClick: () => void s.renameCollection(collection.id) },
+      ...(collection.role === 'archive'
+        ? []
+        : [
+            inArchive
+              ? { label: 'Restore from Archive', icon: 'undo' as const, onClick: () => void s.restoreCollection(collection.id) }
+              : { label: 'Send to Archive…', icon: 'archive' as const, onClick: () => void s.archiveCollection(collection.id) }
+          ]),
       { separator: true },
       ...COLLECTION_COLORS.map<ContextItem>(({ name, value }) => ({
         label: name,
@@ -93,7 +101,9 @@ function CollectionNode({ node, depth, totals }: { node: TreeNode; depth: number
       })),
       { label: 'No color', checked: collection.color === null, onClick: () => void s.colorCollection(collection.id, null) },
       { separator: true },
-      { label: 'Delete collection…', icon: 'deleteFolder', danger: true, onClick: () => void s.deleteCollection(collection.id) }
+      ...(collection.role === 'archive'
+        ? []
+        : [{ label: 'Delete collection…', icon: 'deleteFolder' as const, danger: true, onClick: () => void s.deleteCollection(collection.id) }])
     ]
     s.showContext(e.clientX, e.clientY, items)
   }
@@ -101,7 +111,7 @@ function CollectionNode({ node, depth, totals }: { node: TreeNode; depth: number
   // Dropping a collection here puts it inside this one; the Collections heading takes it back to the top level.
   // (The list is sorted A-Z, so there is nothing to reorder by hand.)
   const dropProps: React.HTMLAttributes<HTMLDivElement> = {
-    draggable: true,
+    draggable: !isArchive, // the Archive stays at the top level
     onDragStart: (e) => {
       e.dataTransfer.setData(COLLECTION_DRAG_TYPE, String(collection.id))
       e.dataTransfer.effectAllowed = 'move'
@@ -117,7 +127,10 @@ function CollectionNode({ node, depth, totals }: { node: TreeNode; depth: number
       setOver(false)
       if (e.dataTransfer.types.includes(BOOKMARK_DRAG_TYPE)) {
         e.preventDefault()
-        void s.moveToCollection(readBookmarkIds(e), collection.id)
+        // Dropped on the Archive itself: file them under the folders they came from. Dropped on a folder inside it:
+        // put them exactly there.
+        if (isArchive) void s.archiveBookmarks(readBookmarkIds(e))
+        else void s.moveToCollection(readBookmarkIds(e), collection.id)
         return
       }
       const draggedId = Number(e.dataTransfer.getData(COLLECTION_DRAG_TYPE))
@@ -135,7 +148,7 @@ function CollectionNode({ node, depth, totals }: { node: TreeNode; depth: number
   return (
     <>
       <NavItem
-        icon={isExpanded && hasChildren ? 'folderOpen' : 'folder'}
+        icon={isArchive ? 'archive' : isExpanded && hasChildren ? 'folderOpen' : 'folder'}
         iconColor={collection.color ?? undefined}
         label={collection.name}
         count={totals.get(collection.id)}
@@ -156,7 +169,7 @@ function CollectionNode({ node, depth, totals }: { node: TreeNode; depth: number
           ) : undefined
         }
       />
-      {isExpanded && node.children.map((child) => <CollectionNode key={child.collection.id} node={child} depth={depth + 1} totals={totals} />)}
+      {isExpanded && node.children.map((child) => <CollectionNode key={child.collection.id} node={child} depth={depth + 1} totals={totals} inArchive={inArchive || collection.role === 'archive'} />)}
     </>
   )
 }
@@ -178,8 +191,10 @@ function SectionToggle({ id, label, open, count, onToggle }: { id: string; label
 export function Sidebar(): React.JSX.Element {
   const s = useStore()
   const [tagFilter, setTagFilter] = useState('')
-  const tree = useMemo(() => buildTree(s.collections), [s.collections])
-  const totals = useMemo(() => subtreeCounts(tree, s.counts.byCollection), [tree, s.counts.byCollection])
+  const wholeTree = useMemo(() => buildTree(s.collections), [s.collections])
+  const totals = useMemo(() => subtreeCounts(wholeTree, s.counts.byCollection), [wholeTree, s.counts.byCollection])
+  const archiveNode = useMemo(() => wholeTree.find((n) => n.collection.role === 'archive') ?? null, [wholeTree])
+  const tree = useMemo(() => wholeTree.filter((n) => n.collection.role !== 'archive'), [wholeTree])
   const tags = useMemo(() => s.tags.filter((t) => t.name.toLowerCase().includes(tagFilter.trim().toLowerCase())), [s.tags, tagFilter])
   const [rootOver, setRootOver] = useState(false)
   const { collectionsOpen, tagsOpen } = s.settings
@@ -275,6 +290,7 @@ export function Sidebar(): React.JSX.Element {
 
       <div className="nav-spacer-grow" />
       <div className="nav-section bottom">
+        {archiveNode && <CollectionNode key={archiveNode.collection.id} node={archiveNode} depth={0} totals={totals} />}
         <NavItem
           icon="trash"
           label="Trash"

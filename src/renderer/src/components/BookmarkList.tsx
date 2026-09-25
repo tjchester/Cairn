@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, type DragEvent } from 'react'
 import type { Bookmark, ViewMode } from '@shared/types'
 import { Icon } from '../icons'
 import { useStore, type ContextItem } from '../store'
-import { buildTree, flattenTree } from '@shared/collections'
+import { archivedCollectionIds, buildTree, flattenTree } from '@shared/collections'
 import { BOOKMARK_DRAG_TYPE, formatDate } from '../util'
 import { Cover, Favicon } from './ui'
 
@@ -27,6 +27,8 @@ function useRowActions() {
     const ids = contextIds(bookmark)
     const many = ids.length > 1
     const collections = flattenTree(buildTree(store.collections))
+    const archiveIds = archivedCollectionIds(store.collections)
+    const archived = bookmark.collectionId !== null && archiveIds.has(bookmark.collectionId)
     const moveMenu = (mx: number, my: number): void =>
       store.showContext(mx, my, [
         { label: 'Unsorted', icon: 'folder', onClick: () => void store.moveToCollection(ids, null) },
@@ -51,6 +53,9 @@ function useRowActions() {
       { separator: true },
       { label: 'Edit…', icon: 'edit', disabled: many, onClick: () => store.setEditing(bookmark.id) },
       { label: 'Refresh details', icon: 'refresh', disabled: many, onClick: () => void store.refreshDetails(bookmark.id) },
+      archived
+        ? { label: many ? 'Bring ' + ids.length + ' back from the Archive' : 'Restore from Archive', icon: 'undo', onClick: () => void store.restoreBookmarks(ids) }
+        : { label: many ? 'Send ' + ids.length + ' bookmarks to the Archive' : 'Send to Archive', icon: 'archive', onClick: () => void store.archiveBookmarks(ids) },
       { label: bookmark.favorite && !many ? 'Remove from favorites' : 'Add to favorites', icon: 'favorite', onClick: () => void store.toggleFavorite(ids) },
       { label: 'Move to…', icon: 'moveToFolder', onClick: () => setTimeout(() => moveMenu(x, y), 0) },
       { separator: true },

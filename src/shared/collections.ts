@@ -27,6 +27,25 @@ export function buildTree(collections: Collection[]): TreeNode[] {
   return roots
 }
 
+/** The Archive and everything below it: what the lists leave out unless archived items are asked for. */
+export function archivedCollectionIds(collections: readonly Collection[]): Set<number> {
+  const archive = collections.find((c) => c.role === 'archive')
+  const out = new Set<number>()
+  if (!archive) return out
+  out.add(archive.id)
+  let grew = true
+  while (grew) {
+    grew = false
+    for (const c of collections) {
+      if (c.parentId !== null && out.has(c.parentId) && !out.has(c.id)) {
+        out.add(c.id)
+        grew = true
+      }
+    }
+  }
+  return out
+}
+
 export function flattenTree(nodes: TreeNode[], depth = 0): { collection: Collection; depth: number }[] {
   return nodes.flatMap((n) => [{ collection: n.collection, depth }, ...flattenTree(n.children, depth + 1)])
 }
