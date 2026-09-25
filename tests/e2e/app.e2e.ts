@@ -1026,6 +1026,29 @@ describe('Cairn (real app)', () => {
     await page.keyboard.press('Escape')
   })
 
+  it('keeps the Trash and the buttons under it in view, however long the lists get', async () => {
+    // A short window, so the collections and tags are far taller than the space for them.
+    await page.setViewportSize({ width: 1280, height: 420 })
+    try {
+      const trash = page.locator('.nav-section.bottom .nav-item', { hasText: 'Trash' })
+      const footer = page.locator('.sidebar-footer')
+      await expect(trash).toBeInViewport()
+      await expect(footer).toBeInViewport()
+
+      // Scrolling the lists does not carry them away.
+      await page.locator('.sidebar-scroll').evaluate((el) => el.scrollTo(0, el.scrollHeight))
+      await expect(trash).toBeInViewport()
+      await expect(footer.getByRole('button', { name: 'Settings' })).toBeInViewport()
+      await shot('30-sidebar-short-window')
+
+      // The lists themselves are what scrolled.
+      expect(await page.locator('.sidebar-scroll').evaluate((el) => el.scrollTop)).toBeGreaterThan(0)
+      expect(await page.locator('.sidebar').evaluate((el) => el.scrollTop)).toBe(0)
+    } finally {
+      await page.setViewportSize({ width: 1280, height: 800 })
+    }
+  })
+
   it('has no renderer errors or CSP violations', () => {
     expect(problems).toEqual([])
   })

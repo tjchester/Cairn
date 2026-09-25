@@ -203,92 +203,94 @@ export function Sidebar(): React.JSX.Element {
 
   return (
     <nav className="sidebar" aria-label="Library">
-      <div className="nav-section">
-        <NavItem icon="bookmark" label="All bookmarks" count={s.counts.all} active={is({ kind: 'all' })} onClick={() => s.setScope({ kind: 'all' })} />
-        <NavItem
-          icon="folder"
-          dim
-          label="Unsorted"
-          count={s.counts.unsorted}
-          active={is({ kind: 'unsorted' })}
-          onClick={() => s.setScope({ kind: 'unsorted' })}
-          onDropBookmarks={(ids) => void s.moveToCollection(ids, null)}
-        />
-        <NavItem icon="favorite" label="Favorites" count={s.counts.favorites} active={is({ kind: 'favorites' })} onClick={() => s.setScope({ kind: 'favorites' })} />
-        {s.pendingProposals > 0 && (
-          <NavItem icon="sparkles" label="Review suggested tags" count={s.pendingProposals} active={false} onClick={() => s.openDialog({ type: 'review-tags' })} />
-        )}
-        {(s.counts.broken > 0 || is({ kind: 'broken' })) && (
-          <NavItem icon="unlink" label="Broken links" count={s.counts.broken} active={is({ kind: 'broken' })} onClick={() => s.setScope({ kind: 'broken' })} />
-        )}
-      </div>
-
-      <div
-        className={`nav-heading${rootOver ? ' drop-over' : ''}`}
-        onDragOver={(e) => {
-          if (!e.dataTransfer.types.includes(COLLECTION_DRAG_TYPE)) return
-          e.preventDefault()
-          setRootOver(true)
-          if (!collectionsOpen) void s.updateSettings({ collectionsOpen: true }) // so you can see where it lands
-        }}
-        onDragLeave={() => setRootOver(false)}
-        onDrop={(e) => {
-          setRootOver(false)
-          const id = Number(e.dataTransfer.getData(COLLECTION_DRAG_TYPE))
-          if (id) (e.preventDefault(), void s.moveCollection(id, null, tree.filter((n) => n.collection.id !== id).length))
-        }}
-      >
-        <SectionToggle id="nav-collections" label="Collections" open={collectionsOpen} count={s.collections.length} onToggle={() => void s.updateSettings({ collectionsOpen: !collectionsOpen })} />
-        <button
-          className="icon-btn"
-          onClick={() => {
-            if (!collectionsOpen) void s.updateSettings({ collectionsOpen: true })
-            void s.createCollection(null)
-          }}
-          aria-label="New collection"
-          title="New collection (Ctrl+Shift+N)"
-        >
-          <Icon name="addFolder" />
-        </button>
-      </div>
-      {/* Closed lists stay in the page (empty) so the heading's arrow keeps something to point at. */}
-      <div className="nav-section tree" id="nav-collections" role="tree" hidden={!collectionsOpen}>
-        {collectionsOpen && tree.length === 0 && <p className="nav-empty">No collections yet. Create one to organize your bookmarks.</p>}
-        {collectionsOpen && tree.map((node) => <CollectionNode key={node.collection.id} node={node} depth={0} totals={totals} />)}
-      </div>
-
-      <div className="nav-heading">
-        <SectionToggle id="nav-tags" label="Tags" open={tagsOpen} count={s.tags.length} onToggle={() => void s.updateSettings({ tagsOpen: !tagsOpen })} />
-      </div>
-      {tagsOpen && s.tags.length > 8 && (
-        <label className="tag-filter">
-          <Icon name="filter" size={12} />
-          <input value={tagFilter} onChange={(e) => setTagFilter(e.target.value)} placeholder="Filter tags" aria-label="Filter tags" />
-        </label>
-      )}
-      <div className="nav-section tags" id="nav-tags" hidden={!tagsOpen}>
-        {tagsOpen && s.tags.length === 0 && <p className="nav-empty">Tags you add to bookmarks show up here.</p>}
-        {(tagsOpen ? tags : []).map((tag) => (
+      {/* Only the lists scroll; the Trash and the buttons below it stay in view however long they grow. */}
+      <div className="sidebar-scroll">
+        <div className="nav-section">
+          <NavItem icon="bookmark" label="All bookmarks" count={s.counts.all} active={is({ kind: 'all' })} onClick={() => s.setScope({ kind: 'all' })} />
           <NavItem
-            key={tag.name}
-            icon="tag"
-            label={tag.name}
-            count={tag.count}
-            active={is({ kind: 'tag', name: tag.name })}
-            onClick={() => s.setScope({ kind: 'tag', name: tag.name })}
-            onDropBookmarks={(ids) => void s.addTags(ids, [tag.name])}
-            onContextMenu={(e) => {
-              e.preventDefault()
-              s.showContext(e.clientX, e.clientY, [
-                { label: 'Rename tag…', icon: 'editTag', onClick: () => void s.renameTag(tag.name) },
-                { label: 'Delete tag…', icon: 'deleteTag', danger: true, onClick: () => void s.deleteTag(tag.name) }
-              ])
-            }}
+            icon="folder"
+            dim
+            label="Unsorted"
+            count={s.counts.unsorted}
+            active={is({ kind: 'unsorted' })}
+            onClick={() => s.setScope({ kind: 'unsorted' })}
+            onDropBookmarks={(ids) => void s.moveToCollection(ids, null)}
           />
-        ))}
+          <NavItem icon="favorite" label="Favorites" count={s.counts.favorites} active={is({ kind: 'favorites' })} onClick={() => s.setScope({ kind: 'favorites' })} />
+          {s.pendingProposals > 0 && (
+            <NavItem icon="sparkles" label="Review suggested tags" count={s.pendingProposals} active={false} onClick={() => s.openDialog({ type: 'review-tags' })} />
+          )}
+          {(s.counts.broken > 0 || is({ kind: 'broken' })) && (
+            <NavItem icon="unlink" label="Broken links" count={s.counts.broken} active={is({ kind: 'broken' })} onClick={() => s.setScope({ kind: 'broken' })} />
+          )}
+        </div>
+
+        <div
+          className={`nav-heading${rootOver ? ' drop-over' : ''}`}
+          onDragOver={(e) => {
+            if (!e.dataTransfer.types.includes(COLLECTION_DRAG_TYPE)) return
+            e.preventDefault()
+            setRootOver(true)
+            if (!collectionsOpen) void s.updateSettings({ collectionsOpen: true }) // so you can see where it lands
+          }}
+          onDragLeave={() => setRootOver(false)}
+          onDrop={(e) => {
+            setRootOver(false)
+            const id = Number(e.dataTransfer.getData(COLLECTION_DRAG_TYPE))
+            if (id) (e.preventDefault(), void s.moveCollection(id, null, tree.filter((n) => n.collection.id !== id).length))
+          }}
+        >
+          <SectionToggle id="nav-collections" label="Collections" open={collectionsOpen} count={s.collections.length} onToggle={() => void s.updateSettings({ collectionsOpen: !collectionsOpen })} />
+          <button
+            className="icon-btn"
+            onClick={() => {
+              if (!collectionsOpen) void s.updateSettings({ collectionsOpen: true })
+              void s.createCollection(null)
+            }}
+            aria-label="New collection"
+            title="New collection (Ctrl+Shift+N)"
+          >
+            <Icon name="addFolder" />
+          </button>
+        </div>
+        {/* Closed lists stay in the page (empty) so the heading's arrow keeps something to point at. */}
+        <div className="nav-section tree" id="nav-collections" role="tree" hidden={!collectionsOpen}>
+          {collectionsOpen && tree.length === 0 && <p className="nav-empty">No collections yet. Create one to organize your bookmarks.</p>}
+          {collectionsOpen && tree.map((node) => <CollectionNode key={node.collection.id} node={node} depth={0} totals={totals} />)}
+        </div>
+
+        <div className="nav-heading">
+          <SectionToggle id="nav-tags" label="Tags" open={tagsOpen} count={s.tags.length} onToggle={() => void s.updateSettings({ tagsOpen: !tagsOpen })} />
+        </div>
+        {tagsOpen && s.tags.length > 8 && (
+          <label className="tag-filter">
+            <Icon name="filter" size={12} />
+            <input value={tagFilter} onChange={(e) => setTagFilter(e.target.value)} placeholder="Filter tags" aria-label="Filter tags" />
+          </label>
+        )}
+        <div className="nav-section tags" id="nav-tags" hidden={!tagsOpen}>
+          {tagsOpen && s.tags.length === 0 && <p className="nav-empty">Tags you add to bookmarks show up here.</p>}
+          {(tagsOpen ? tags : []).map((tag) => (
+            <NavItem
+              key={tag.name}
+              icon="tag"
+              label={tag.name}
+              count={tag.count}
+              active={is({ kind: 'tag', name: tag.name })}
+              onClick={() => s.setScope({ kind: 'tag', name: tag.name })}
+              onDropBookmarks={(ids) => void s.addTags(ids, [tag.name])}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                s.showContext(e.clientX, e.clientY, [
+                  { label: 'Rename tag…', icon: 'editTag', onClick: () => void s.renameTag(tag.name) },
+                  { label: 'Delete tag…', icon: 'deleteTag', danger: true, onClick: () => void s.deleteTag(tag.name) }
+                ])
+              }}
+            />
+          ))}
+        </div>
       </div>
 
-      <div className="nav-spacer-grow" />
       <div className="nav-section bottom">
         {archiveNode && <CollectionNode key={archiveNode.collection.id} node={archiveNode} depth={0} totals={totals} />}
         <NavItem
