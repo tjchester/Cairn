@@ -961,6 +961,34 @@ describe('Cairn (real app)', () => {
     expect(collections.find((c) => c.id === home?.parentId)?.parentId).toBeNull() // Menus, back at the top level
   })
 
+  it('shows where each bookmark is filed, and the trail moves you there', async () => {
+    await cairn(async (api) => {
+      const favorites = await api.collections.create({ name: 'Favorites bar' })
+      const menus = await api.collections.create({ name: 'Menus', parentId: favorites.id })
+      const college = await api.collections.create({ name: 'College', parentId: menus.id })
+      await api.bookmarks.create({ url: 'https://college.example/canteen', title: 'Canteen opening times', collectionId: college.id })
+      return true
+    })
+    await page.reload()
+    await page.waitForSelector('.bm')
+    await page.getByLabel('Search bookmarks').fill('canteen')
+
+    const trail = rows().first().locator('.bm-path')
+    await expect(trail).toHaveText('Favorites bar›Menus›College')
+    await shot('27-list-path')
+
+    // A part of the trail takes you to that collection, without selecting the row.
+    await trail.getByRole('button', { name: 'Menus' }).click()
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Menus')
+    await expect(page.locator('.bulk-bar')).toHaveCount(0)
+
+    // A bookmark in no collection says so.
+    await page.locator('.nav-item', { hasText: 'All bookmarks' }).click()
+    await page.getByLabel('Search bookmarks').fill('Offline page')
+    await expect(rows().first().locator('.bm-path')).toHaveText('Unsorted')
+    await page.getByLabel('Search bookmarks').fill('')
+  })
+
   it('has no renderer errors or CSP violations', () => {
     expect(problems).toEqual([])
   })

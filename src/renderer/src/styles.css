@@ -598,7 +598,7 @@ input[aria-invalid='true'] {
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  padding: 10px 12px;
+  padding: 12px 14px;
 }
 .bm.headlines {
   display: flex;
@@ -631,8 +631,8 @@ input[aria-invalid='true'] {
   opacity: 0.55;
 }
 .bm.list .cover {
-  width: 96px;
-  height: 62px;
+  width: 108px;
+  height: 70px;
 }
 .bm.grid .cover {
   width: 100%;
@@ -706,6 +706,35 @@ input[aria-invalid='true'] {
 }
 .bm.list .bm-excerpt {
   -webkit-line-clamp: 1;
+}
+/* Where a bookmark is filed: "Favorites > Menus > College", each part clickable. */
+.bm-path {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.bm-path button {
+  padding: 0 3px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.bm-path button:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.bm-path button.dim {
+  font-style: italic;
+}
+.bm-path-sep {
+  opacity: 0.5;
 }
 .dot {
   opacity: 0.6;

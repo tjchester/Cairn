@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Collection } from '../src/shared/types'
-import { buildTree, flattenTree } from '../src/shared/collections'
+import { buildTree, collectionChain, flattenTree } from '../src/shared/collections'
 
 // How the sidebar orders things. The tree is what the sidebar, the "move to collection" menus and the
 // collection pickers all render, so sorting it once sorts every list of collections in the app.
@@ -12,6 +12,25 @@ const make = (name: string, parentId: number | null = null, position = 0): Colle
   name,
   color: null,
   position
+})
+
+describe('the trail a bookmark shows', () => {
+  it('reads outermost first, and is empty for a bookmark in no collection', () => {
+    const favorites = make('Favorites bar')
+    const menus = make('Menus', favorites.id)
+    const college = make('College', menus.id)
+    const all = [college, favorites, menus]
+    expect(collectionChain(all, college.id).map((c) => c.name)).toEqual(['Favorites bar', 'Menus', 'College'])
+    expect(collectionChain(all, favorites.id).map((c) => c.name)).toEqual(['Favorites bar'])
+    expect(collectionChain(all, null)).toEqual([])
+    expect(collectionChain(all, 9999)).toEqual([]) // a collection that has gone
+  })
+
+  it('stops rather than looping if the tree somehow points at itself', () => {
+    const loop = make('Loop')
+    loop.parentId = loop.id
+    expect(collectionChain([loop], loop.id).map((c) => c.name)).toEqual(['Loop'])
+  })
 })
 
 describe('collection order', () => {

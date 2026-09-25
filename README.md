@@ -14,7 +14,8 @@ Raindrop.io. It shares no code or assets with them and is not affiliated with an
 - **Archive** – one collection for what you keep but no longer use; it stays out of your way (see *The Archive* below).
 - **Auto-tagging** – built-in and offline, with an optional local model (see *Auto-tagging* below).
 - **Save from your browser** – a bookmarklet and a local-only API (see *Local API* below): one click sends the page to Cairn, which fetches its details and tags it.
-- **Three layouts** – list, grid and headlines; sort by date added/updated, title or website.
+- **Three layouts** – list, grid and headlines; sort by date added/updated, title or website. List rows show where each
+  bookmark is filed ("Favorites bar › Menus › College"), and each part of that trail takes you to the collection.
 - **Powerful search** – instant, substring matching across title, URL, note, description and tags, with operators:
 
   | Query | Meaning |

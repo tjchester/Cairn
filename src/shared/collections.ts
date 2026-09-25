@@ -46,6 +46,20 @@ export function archivedCollectionIds(collections: readonly Collection[]): Set<n
   return out
 }
 
+/** A collection with its ancestors, outermost first: "Favorites", "Menus", "College". */
+export function collectionChain(collections: readonly Collection[], id: number | null): Collection[] {
+  const byId = new Map(collections.map((c) => [c.id, c]))
+  const chain: Collection[] = []
+  const seen = new Set<number>()
+  let cursor = id === null ? undefined : byId.get(id)
+  while (cursor && !seen.has(cursor.id)) {
+    seen.add(cursor.id)
+    chain.unshift(cursor)
+    cursor = cursor.parentId === null ? undefined : byId.get(cursor.parentId)
+  }
+  return chain
+}
+
 export function flattenTree(nodes: TreeNode[], depth = 0): { collection: Collection; depth: number }[] {
   return nodes.flatMap((n) => [{ collection: n.collection, depth }, ...flattenTree(n.children, depth + 1)])
 }

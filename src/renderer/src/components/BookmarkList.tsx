@@ -1,8 +1,8 @@
-import { memo, useEffect, useRef, type DragEvent } from 'react'
-import type { Bookmark, ViewMode } from '@shared/types'
+import { Fragment, memo, useEffect, useMemo, useRef, type DragEvent } from 'react'
+import type { Bookmark, Scope, ViewMode } from '@shared/types'
 import { Icon } from '../icons'
 import { useStore, type ContextItem } from '../store'
-import { archivedCollectionIds, buildTree, flattenTree } from '@shared/collections'
+import { archivedCollectionIds, buildTree, collectionChain, flattenTree } from '@shared/collections'
 import { BOOKMARK_DRAG_TYPE, formatDate } from '../util'
 import { Cover, Favicon } from './ui'
 
@@ -64,6 +64,44 @@ function useRowActions() {
   }
 
   return { contextIds, openContext }
+}
+
+/**
+ * Where a bookmark is filed, as a trail of collections you can click: "Favorites › Menus › College". It saves
+ * opening each bookmark to find out where it lives.
+ */
+function CollectionPath({ collectionId }: { collectionId: number | null }) {
+  const collections = useStore((s) => s.collections)
+  const store = useStore.getState
+  const chain = useMemo(() => collectionChain(collections, collectionId), [collections, collectionId])
+  const go = (e: React.MouseEvent, scope: Scope): void => {
+    e.stopPropagation()
+    store().setScope(scope)
+  }
+
+  if (chain.length === 0) {
+    return (
+      <div className="bm-path">
+        <Icon name="folder" size={12} />
+        <button className="dim" onClick={(e) => go(e, { kind: 'unsorted' })} title="Not in a collection">
+          Unsorted
+        </button>
+      </div>
+    )
+  }
+  return (
+    <div className="bm-path" title={chain.map((c) => c.name).join(' › ')}>
+      <Icon name={chain[0]?.role === 'archive' ? 'archive' : 'folder'} size={12} />
+      {chain.map((c, index) => (
+        <Fragment key={c.id}>
+          {index > 0 && <span className="bm-path-sep" aria-hidden="true">›</span>}
+          <button onClick={(e) => go(e, { kind: 'collection', id: c.id })} title={'Show ' + c.name}>
+            {c.name}
+          </button>
+        </Fragment>
+      ))}
+    </div>
+  )
 }
 
 const BookmarkRow = memo(function BookmarkRow({ bookmark, view, selected, editing, inTrash }: RowProps) {
@@ -204,6 +242,7 @@ const BookmarkRow = memo(function BookmarkRow({ bookmark, view, selected, editin
           {bookmark.favorite && <Icon name="favorite" size={12} className="fav-mark" />}
           {broken}
         </div>
+        <CollectionPath collectionId={bookmark.collectionId} />
         <div className="bm-meta">
           <Favicon src={bookmark.faviconUrl} size={14} />
           <span className="bm-domain">{bookmark.domain}</span>
