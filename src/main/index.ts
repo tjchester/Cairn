@@ -92,7 +92,14 @@ if (!app.requestSingleInstanceLock()) {
 
     // The local API (browser bookmarklet, command-line tools): runs only while the app is open and switched on.
     const ingest = new IngestService({ repo, tagging, notify: (event) => sendToWindow('capture:changed', event) })
-    const api = new ApiController({ repo, ingest, version: app.getVersion(), getSettings: () => readSettings(repo).api, log })
+    const api = new ApiController({
+      repo,
+      ingest,
+      version: app.getVersion(),
+      getSettings: () => readSettings(repo).api,
+      discoveryFile: join(app.getPath('userData'), 'api.json'),
+      log
+    })
     void api.apply()
     app.on('will-quit', () => void api.stop())
 

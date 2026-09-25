@@ -227,8 +227,10 @@ then paste the copied snippet as the address of a new bookmark in your browser. 
 fetches the details and suggests tags according to your *Auto-tagging* setting, exactly as if you had added it with *New bookmark*.
 
 The server listens on `127.0.0.1` only (port 47821, changeable), runs only while Cairn is open, and needs a secret key that only the bookmarklet
-(and *Copy key*) know. It also has a JSON endpoint, `POST /api/v1/bookmarks`, for scripts; the parameters mirror the *New bookmark* dialog and only
-`url` is required. Read endpoints for command-line tools come later. See [docs/api.md](docs/api.md) for the endpoint reference and the security model.
+(and *Copy key*) know. It also has a JSON API: `POST /api/v1/bookmarks` adds one (the parameters mirror the *New bookmark* dialog; only `url` is required), and
+`GET /api/v1/bookmarks`, `/collections`, `/tags` and `/stats` read the library. Reading takes a separate key, so the one inside the
+bookmarklet can never read anything. **`node bin/cairn.mjs`** is a command-line tool for those reads (`cairn search rust --limit 5`,
+`cairn stats`, `--json` for piping); it finds the running app by itself. See [docs/api.md](docs/api.md) for the endpoint reference and the security model.
 
 ## Roadmap ideas
 

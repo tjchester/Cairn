@@ -19,6 +19,7 @@ import type { Repo } from '../src/main/db/repo'
 import { makeRepo } from './helpers'
 
 const KEY = 'test-key-0123456789'
+const READ_KEY = 'test-read-key-9876543210'
 
 // ------------------------------------------------------------------ settings
 
@@ -414,6 +415,7 @@ describe('the local API server', () => {
       ingest: made.ingest,
       repo: made.repo,
       getKey: () => KEY,
+      getReadKey: () => READ_KEY,
       version: '9.9.9',
       now: extra.now,
       log: extra.logs ? (event, data) => extra.logs?.push([event, data]) : undefined
@@ -423,7 +425,8 @@ describe('the local API server', () => {
     const auth = { authorization: 'Bearer ' + KEY, 'content-type': 'application/json' }
     const post = (body: unknown, headers: Record<string, string> = auth) =>
       call(server.port, { method: 'POST', path: '/api/v1/bookmarks', headers, body: typeof body === 'string' ? body : JSON.stringify(body) })
-    return { ...made, server, auth, post, get: (path: string, headers?: Record<string, string>) => call(server.port, { path, headers }) }
+    const read = (path: string, key = READ_KEY) => call(server.port, { path, headers: { authorization: 'Bearer ' + key } })
+    return { ...made, server, auth, post, read, get: (path: string, headers?: Record<string, string>) => call(server.port, { path, headers }) }
   }
 
   it('answers a ping without a key, and says nothing about your data', async () => {
@@ -520,7 +523,7 @@ describe('the local API server', () => {
 
   it('checks the method, the content type and the body', async () => {
     const { post, auth, server } = await boot()
-    expect((await call(server.port, { path: '/api/v1/bookmarks', headers: auth })).status).toBe(405)
+    expect((await call(server.port, { path: '/api/v1/bookmarks', headers: auth })).status).toBe(401) // GET is the read side, which this key may not use
     expect((await post({ url: 'https://example.com/a' }, { authorization: auth.authorization, 'content-type': 'text/plain' })).status).toBe(415)
     expect((await post('not json')).json.error.code).toBe('invalid-json')
     const unknown = await post({ url: 'https://example.com/a', bogus: 1 })
@@ -622,6 +625,102 @@ describe('the local API server', () => {
     expect((await get('/api/v1/ping')).status).toBe(200)
     await server.stop()
     await expect(call(port, { path: '/api/v1/ping' })).rejects.toThrow()
+  })
+})
+
+describe('reading the library', () => {
+  const stops: (() => Promise<void>)[] = []
+  afterEach(async () => {
+    while (stops.length) await stops.pop()?.()
+  })
+
+  /** A small library: two GitHub pages in Dev/Rust, one recipe, one favourite, one archived. */
+  async function library() {
+    const made = makeIngest('off')
+    const { repo } = made
+    const dev = repo.createCollection({ name: 'Dev' })
+    const rust = repo.createCollection({ name: 'Rust', parentId: dev.id })
+    repo.createBookmark({ url: 'https://github.com/org/one', title: 'Repo one', collectionId: rust.id, tags: ['code', 'rust'] })
+    repo.createBookmark({ url: 'https://github.com/org/two', title: 'Repo two', collectionId: rust.id, tags: ['code'], favorite: true })
+    repo.createBookmark({ url: 'https://recipes.example/soup', title: 'Soup', tags: ['cooking'] })
+    const old = repo.createBookmark({ url: 'https://old.example/', title: 'Old thing', collectionId: dev.id })
+    repo.archiveBookmarks([old.id])
+
+    const server = new ApiServer({ ingest: made.ingest, repo, getKey: () => KEY, getReadKey: () => READ_KEY, version: '9.9.9' })
+    await server.start(0)
+    stops.push(() => server.stop())
+    const read = (path: string, key = READ_KEY) => call(server.port, { path, headers: { authorization: 'Bearer ' + key } })
+    return { ...made, server, read }
+  }
+
+  it('searches the way the app does, and says how many there are in all', async () => {
+    const { read } = await library()
+    const all = await read('/api/v1/bookmarks')
+    expect(all.status).toBe(200)
+    expect(all.json.total).toBe(3) // the archived one is left out
+    expect(all.json.bookmarks.map((b: { title: string }) => b.title).sort()).toEqual(['Repo one', 'Repo two', 'Soup'])
+    expect(all.json.bookmarks[0]).toMatchObject({ id: expect.any(Number), url: expect.any(String), tags: expect.any(Array) })
+
+    expect((await read('/api/v1/bookmarks?q=site:github.com')).json.total).toBe(2)
+    expect((await read('/api/v1/bookmarks?q=%23cooking')).json.total).toBe(1)
+    expect((await read('/api/v1/bookmarks?scope=favorites')).json.total).toBe(1)
+    expect((await read('/api/v1/bookmarks?scope=collection:Dev/Rust')).json.total).toBe(2)
+    expect((await read('/api/v1/bookmarks?scope=tag:rust')).json.bookmarks[0].title).toBe('Repo one')
+    expect((await read('/api/v1/bookmarks?archived=1')).json.total).toBe(4)
+  })
+
+  it('pages and sorts', async () => {
+    const { read } = await library()
+    const page = await read('/api/v1/bookmarks?sort=title&direction=asc&limit=2')
+    expect(page.json).toMatchObject({ total: 3, limit: 2, offset: 0 })
+    expect(page.json.bookmarks.map((b: { title: string }) => b.title)).toEqual(['Repo one', 'Repo two'])
+    const next = await read('/api/v1/bookmarks?sort=title&direction=asc&limit=2&offset=2')
+    expect(next.json.bookmarks.map((b: { title: string }) => b.title)).toEqual(['Soup'])
+  })
+
+  it('gives one bookmark, the collections, the tags and a count of everything', async () => {
+    const { read, repo } = await library()
+    const id = repo.findByUrl('https://github.com/org/one')?.id as number
+    const one = await read('/api/v1/bookmarks/' + id)
+    expect(one.json.bookmark).toMatchObject({ id, title: 'Repo one', collection: 'Dev/Rust', tags: ['code', 'rust'] })
+    expect((await read('/api/v1/bookmarks/999999')).status).toBe(404)
+
+    const collections = await read('/api/v1/collections')
+    expect(collections.json.collections.map((c: { path: string }) => c.path)).toEqual(expect.arrayContaining(['Dev', 'Dev/Rust', 'Archive']))
+    expect(collections.json.collections.find((c: { path: string }) => c.path === 'Dev/Rust')).toMatchObject({ bookmarks: 2 })
+    expect(collections.json.collections.find((c: { path: string }) => c.path === 'Archive')).toMatchObject({ role: 'archive' })
+
+    expect((await read('/api/v1/tags')).json.tags).toEqual(expect.arrayContaining([{ name: 'code', bookmarks: 2 }]))
+    expect((await read('/api/v1/stats')).json).toMatchObject({ bookmarks: 3, favorites: 1, archived: 1, trash: 0, collections: 4 }) // Dev, Dev/Rust, Archive, Archive/Dev
+  })
+
+  it('explains a request it cannot make sense of', async () => {
+    const { read } = await library()
+    expect((await read('/api/v1/bookmarks?scope=nonsense')).json.error.message).toMatch(/Unknown scope/)
+    expect((await read('/api/v1/bookmarks?scope=collection:Nowhere')).json.error.code).toBe('unknown-collection')
+    expect((await read('/api/v1/bookmarks?limit=0')).json.error.message).toMatch(/whole number/)
+    expect((await read('/api/v1/bookmarks?sort=colour')).json.error.message).toMatch(/"sort" must be/)
+  })
+
+  it('takes only the read key: the one in the bookmarklet cannot read, and the read key cannot add', async () => {
+    const { server, read } = await library()
+    expect((await read('/api/v1/bookmarks', KEY)).status).toBe(401) // the key that may add bookmarks
+    expect((await call(server.port, { path: '/api/v1/bookmarks' })).status).toBe(401) // no key at all
+
+    const added = await call(server.port, {
+      method: 'POST',
+      path: '/api/v1/bookmarks',
+      headers: { authorization: 'Bearer ' + READ_KEY, 'content-type': 'application/json' },
+      body: JSON.stringify({ url: 'https://sneaky.example/' })
+    })
+    expect(added.status).toBe(401)
+  })
+
+  it('is closed to web pages, like the rest of it', async () => {
+    const { server } = await library()
+    const fromPage = await call(server.port, { path: '/api/v1/bookmarks', headers: { authorization: 'Bearer ' + READ_KEY, origin: 'https://evil.example.com' } })
+    expect(fromPage.status).toBe(403)
+    expect((await call(server.port, { method: 'POST', path: '/api/v1/tags', headers: { authorization: 'Bearer ' + READ_KEY } })).status).toBe(405)
   })
 })
 

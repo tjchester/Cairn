@@ -5,8 +5,13 @@ Cairn can run a small HTTP server so that a browser bookmarklet, and your own sc
 - It is **off by default**. Turn it on in *Settings → Browser & API*, or by choosing *Tools → Copy Bookmarklet for Your Browser* the first time.
 - It runs **only while Cairn is open**. Quitting the app stops it.
 - It listens on **`127.0.0.1` only** (default port `47821`, changeable in Settings). Nothing on your network can connect to it.
-- Every request except `GET /api/v1/ping` needs a **secret key**. It is created the first time the API is switched on and lives in Cairn's database.
-  The bookmarklet contains it. *Copy key (for scripts)* puts it on the clipboard; *Make a new key* invalidates every bookmarklet and script that has the old one.
+- There are **two keys**, both made the first time the API is switched on and kept in Cairn's database:
+  - a **write key**, which may add bookmarks. This is the one inside the bookmarklet; *Copy key (for scripts)* in Settings puts it on the clipboard.
+  - a **read key**, which may read the library and nothing else. Neither key does the other's job, so a web page that gets hold of the
+    bookmarklet's key still cannot read a single bookmark.
+  *Make a new key* in Settings replaces both, and every bookmarklet and script with an old one stops working.
+- While the API is running, Cairn writes **`api.json`** into its data folder (`%APPDATA%\Cairn` on Windows) with the address and the read key,
+  so a tool on this computer can find it without being set up. The file goes when the API stops.
 
 ## The bookmarklet
 
@@ -91,11 +96,63 @@ curl -s http://127.0.0.1:47821/api/v1/bookmarks \
   -d '{"url": "https://example.com/article", "tags": ["reading"], "collection": "Inbox", "wait": 15}'
 ```
 
+### `GET /api/v1/bookmarks`
+
+Searches, exactly as the app's own list does. Headers: `Authorization: Bearer <read key>`.
+
+| Parameter | Meaning |
+| --- | --- |
+| `q` | the search box syntax: words, `"a phrase"`, `-word`, `#tag`, `site:example.com`, `is:favorite`, `is:broken`, `is:unsorted`, `is:archived`, `has:note`, `has:cover` |
+| `scope` | `all` (default), `unsorted`, `favorites`, `broken`, `trash`, `tag:<name>`, `collection:<id>` or `collection:Dev/Rust` |
+| `sort` | `created` (default), `updated`, `title`, `domain` |
+| `direction` | `desc` (default) or `asc` |
+| `limit`, `offset` | 1–1000 (default 50), and where to start |
+| `archived` | include what is in the Archive (left out by default) |
+
+```json
+{ "total": 1530, "limit": 50, "offset": 0, "bookmarks": [ { "id": 42, "url": "…", "title": "…", "collection": "Dev/Rust", "tags": ["rust"] } ] }
+```
+
+### `GET /api/v1/bookmarks/<id>`
+
+One bookmark, in the same shape. `404` if there is none.
+
+### `GET /api/v1/collections`
+
+Every collection with its `path`, `parentId`, colour and how many bookmarks it holds directly. The Archive carries `"role": "archive"`.
+
+### `GET /api/v1/tags`
+
+Every tag with how many bookmarks use it (what is in the Archive is left out, as in the app).
+
+### `GET /api/v1/stats`
+
+Counts: bookmarks, unsorted, favorites, broken, archived, trash, collections, tags.
+
 ### `GET /capture?k=<key>&url=<address>&...`
 
 What the bookmarklet opens. It takes the same fields as the JSON body as query parameters (`tags` comma-separated, booleans as
 `1`/`0`) and answers with a small HTML page. Because a navigation cannot carry a header, this is the one place the key goes in the
 address; it is not used by scripts.
+
+## The command-line tool
+
+`bin/cairn.mjs` is a small program that reads a running Cairn. It needs nothing installed: `node bin/cairn.mjs stats`, or
+`npm link` once and then just `cairn`.
+
+```
+cairn search rust async --limit 5     search (the app's own syntax works: #tag site:example.com is:favorite)
+cairn search --scope collection:Dev/Rust --sort title --asc
+cairn get 1428                        one bookmark in full
+cairn collections                     the tree, with how many bookmarks each holds
+cairn tags --limit 20                 the tags you use, most used first
+cairn stats                           how much of everything there is
+cairn ping                            check that Cairn is running
+```
+
+Add `--json` to any of them to get the answer as JSON, for piping into `jq` or a script. It finds the app through `api.json`;
+`CAIRN_URL` and `CAIRN_READ_KEY` (or `--url` and `--key`) override that. It only reads: adding a bookmark goes through the
+bookmarklet or `POST /api/v1/bookmarks` with the write key.
 
 ## Security notes
 
@@ -103,15 +160,16 @@ address; it is not used by scripts.
 - **DNS rebinding:** requests whose `Host` header is not `127.0.0.1:<port>` or `localhost:<port>` are refused.
 - **Web pages cannot use the JSON endpoint:** requests with an `Origin` header, or marked cross-site by the browser, are refused, and
   no CORS headers are sent, so a page cannot read responses either. `Content-Type: application/json` is required.
-- **The key** is compared in constant time, is never shown in the app's window, and is never written to logs (which contain the
-  method, path and status only, never query strings).
-- **What a leaked key allows:** adding bookmarks (and having Cairn fetch the pages you name). It cannot read your data. A malicious
-  page could in principle learn the key by watching what the bookmarklet does while you click it; if you suspect that, make a new key.
+- **The keys** are compared in constant time, are never shown in the app's window, and are never written to logs (which contain the
+  method, path and status only, never query strings). Reading takes the read key; adding takes the write key; neither does the other's job.
+- **What a leaked write key allows:** adding bookmarks (and having Cairn fetch the pages you name). It cannot read your data. A malicious
+  page could in principle learn it by watching what the bookmarklet does while you click it; if you suspect that, make a new key.
+- **The read key** can read everything in your library, so treat it as you would the library itself. It lives in `api.json` in your own
+  profile folder, which already holds the database, and is written readable by you alone.
 - **Limits:** bodies up to 64 KB, at most 30 bookmarks per minute, Cairn's own API address cannot be added as a bookmark.
 - Anything running as you on your computer can read Cairn's database anyway, so this protects against web pages and other computers, not against your own account.
 - The pop-up page escapes everything it shows (a page's title is untrusted) and carries a Content-Security-Policy that allows nothing but its own script and style.
 
 ## Later
 
-Read endpoints for command-line tools (search, get, collections, tags) are planned. They will use a separate read key, so the key inside a
-bookmarklet can never be used to read your bookmarks.
+Changing bookmarks from a script (update, delete, tag) and an OpenAPI description of all of it.

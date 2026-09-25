@@ -1,14 +1,15 @@
 import { randomBytes } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import type { Bookmark } from '@shared/types'
 import type { Repo } from '../db/repo'
 import { bearerToken, keysMatch } from './auth'
 import { CAPTURE_PATH } from './bookmarklet'
 import { contentSecurityPolicy, renderCapturePage, type CapturePageModel } from './capturePage'
 import { ApiError } from './errors'
 import type { CaptureOutcome, Enrichment, IngestService } from './ingest'
+import { listCollections, listTags, oneBookmark, searchBookmarks, stats } from './read'
 import { parseCapture, queryToBody, type CaptureRequest } from './schema'
+import { toApiBookmark } from './shape'
 
 // The local API: a small HTTP server on 127.0.0.1 that runs only while the app is open.
 //
@@ -24,39 +25,20 @@ import { parseCapture, queryToBody, type CaptureRequest } from './schema'
 export const API_VERSION = 1
 const MAX_BODY_BYTES = 64 * 1024
 const RATE_LIMIT = { perMinute: 30, windowMs: 60_000 }
+/** Reading changes nothing, so a script paging through a large library is given plenty of room. */
+const READ_LIMIT_PER_MINUTE = 600
 
 export interface ApiServerDeps {
   ingest: IngestService
   repo: Repo
-  /** Read on every request, so resetting the key takes effect at once. */
+  /** The key that may add bookmarks (the one inside the bookmarklet). Read on every request, so a reset takes effect at once. */
   getKey: () => string
+  /** The key that may read the library. Kept apart from the one above, so a page that gets hold of the bookmarklet's key cannot read anything. */
+  getReadKey: () => string
   version: string
   /** Method, path and status only: never keys, addresses of pages, or their content. */
   log?: (event: string, data?: Record<string, unknown>) => void
   now?: () => number
-}
-
-/** What the API tells callers about a bookmark. A stable public shape, separate from the app's internal one. */
-export function toApiBookmark(repo: Repo, b: Bookmark): Record<string, unknown> {
-  const path = repo.collectionPath(b.collectionId)
-  return {
-    id: b.id,
-    url: b.url,
-    title: b.title,
-    description: b.excerpt,
-    note: b.note,
-    tags: b.tags,
-    autoTags: b.autoTags,
-    favorite: b.favorite,
-    collectionId: b.collectionId,
-    collection: b.collectionId === null ? null : path.join('/'),
-    domain: b.domain,
-    coverUrl: b.coverUrl,
-    faviconUrl: b.faviconUrl,
-    createdAt: b.createdAt,
-    updatedAt: b.updatedAt,
-    inTrash: b.deletedAt !== null
-  }
 }
 
 function messageFor(error: NodeJS.ErrnoException, port: number): string {
@@ -69,6 +51,7 @@ export class ApiServer {
   private server: Server | null = null
   private boundPort = 0
   private hits: number[] = []
+  private readHits: number[] = []
 
   constructor(private readonly deps: ApiServerDeps) {}
 
@@ -112,8 +95,14 @@ export class ApiServer {
     try {
       this.checkHost(req)
       const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+      const read = /^\/api\/v1\/bookmarks\/(\d+)$/.exec(url.pathname)
       if (url.pathname === '/api/v1/ping') status = this.ping(req, res)
+      else if (url.pathname === '/api/v1/bookmarks' && req.method === 'GET') status = this.read(req, res, () => searchBookmarks(this.deps.repo, url.searchParams))
       else if (url.pathname === '/api/v1/bookmarks') status = await this.createBookmark(req, res)
+      else if (read) status = this.read(req, res, () => oneBookmark(this.deps.repo, Number(read[1])))
+      else if (url.pathname === '/api/v1/collections') status = this.read(req, res, () => listCollections(this.deps.repo))
+      else if (url.pathname === '/api/v1/tags') status = this.read(req, res, () => listTags(this.deps.repo))
+      else if (url.pathname === '/api/v1/stats') status = this.read(req, res, () => stats(this.deps.repo))
       else if (url.pathname === CAPTURE_PATH) status = this.capturePage(req, res, url)
       else throw new ApiError(404, 'not-found', 'There is nothing here.')
     } catch (error) {
@@ -145,10 +134,25 @@ export class ApiServer {
     }
   }
 
-  private authenticate(given: string | undefined): void {
-    if (!keysMatch(given, this.deps.getKey())) {
+  private authenticate(given: string | undefined, key = this.deps.getKey()): void {
+    if (!keysMatch(given, key)) {
       throw new ApiError(401, 'unauthorized', 'The key is missing or wrong. Send it as "Authorization: Bearer <key>".', { 'WWW-Authenticate': 'Bearer' })
     }
+  }
+
+  /**
+   * Answers a question about the library. Reading takes the read key, never the one that may add bookmarks, and is
+   * refused to web pages like everything else here.
+   */
+  private read(req: IncomingMessage, res: ServerResponse, answer: () => Record<string, unknown>): number {
+    this.allow(req, 'GET')
+    this.refuseBrowsers(req)
+    this.authenticate(bearerToken(req.headers.authorization), this.deps.getReadKey())
+    this.readHits = this.readHits.filter((t) => (this.deps.now ?? Date.now)() - t < RATE_LIMIT.windowMs)
+    if (this.readHits.length >= READ_LIMIT_PER_MINUTE) throw new ApiError(429, 'rate-limited', 'Too many requests in a minute. Try again shortly.', { 'Retry-After': '10' })
+    this.readHits.push((this.deps.now ?? Date.now)())
+    this.sendJson(res, 200, answer())
+    return 200
   }
 
   private rateLimit(): void {

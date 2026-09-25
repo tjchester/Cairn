@@ -46,5 +46,8 @@
     "vite": "^7.3.6",
     "vitest": "^4.1.11",
     "zustand": "^5.0.15"
+  },
+  "bin": {
+    "cairn": "bin/cairn.mjs"
   }
 }
