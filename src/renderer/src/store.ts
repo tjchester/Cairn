@@ -90,7 +90,7 @@ interface Store {
   selectOnly(id: number): void
   toggleSelect(id: number): void
   selectRange(id: number): void
-  selectAll(): void
+  selectAll(): Promise<void>
   clearSelection(): void
   moveSelection(delta: number): void
   setEditing(id: number | null): void
@@ -227,11 +227,13 @@ export const useStore = create<Store>((set, get) => {
         const page = await api.bookmarks.query({ scope, search, sort: settings.sort, direction: settings.direction, limit, offset: 0 })
         if (seq !== requestSeq) return
         const present = new Set(page.items.map((b) => b.id))
+        // Forget bookmarks that have gone, but only when this page is the whole list: a selection may reach past it.
+        const whole = page.items.length >= page.total
         set((s) => ({
           items: page.items,
           total: page.total,
           loading: false,
-          selected: new Set([...s.selected].filter((id) => present.has(id))),
+          selected: whole ? new Set([...s.selected].filter((id) => present.has(id))) : s.selected,
           editingId: s.editingId !== null && present.has(s.editingId) ? s.editingId : null
         }))
       } catch (error) {
@@ -337,8 +339,11 @@ export const useStore = create<Store>((set, get) => {
       const [lo, hi] = from < to ? [from, to] : [to, from]
       set({ selected: new Set(items.slice(lo, hi + 1).map((b) => b.id)) })
     },
-    selectAll() {
-      set({ selected: new Set(get().items.map((b) => b.id)) })
+    async selectAll() {
+      // Everything the list is showing, not only the part that has been scrolled into view.
+      const { scope, search } = get()
+      const ids = await guard(() => api.bookmarks.matchingIds({ scope, search }))
+      set({ selected: new Set(ids ?? get().items.map((b) => b.id)) })
     },
     clearSelection() {
       set({ selected: new Set(), anchorId: null })

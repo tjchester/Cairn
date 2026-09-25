@@ -621,7 +621,8 @@ export class Repo {
 
   // ------------------------------------------------------------------- query
 
-  query(q: BookmarkQuery): BookmarkPage {
+  /** The WHERE clause (and its parameters) for a scope and search box: what "the list you are looking at" means. */
+  private filterFor(q: { scope: Scope; search?: string }): { where: string; params: SqlValue[] } {
     const clauses: string[] = []
     const params: SqlValue[] = []
     this.applyScope(q.scope, clauses, params)
@@ -629,8 +630,20 @@ export class Repo {
     const search = buildSearchClauses(parseSearch(q.search ?? ''))
     clauses.push(...search.clauses)
     params.push(...search.params)
+    return { where: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '', params }
+  }
 
-    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
+  /**
+   * Every bookmark the current list would show, however far it has been scrolled: what "select all" means.
+   * Ids only, so a selection of thousands costs little.
+   */
+  matchingIds(q: { scope: Scope; search?: string }, limit = 200_000): number[] {
+    const { where, params } = this.filterFor(q)
+    return this.all(`SELECT b.id FROM bookmarks b ${where} ORDER BY b.id LIMIT ?`, ...params, Math.max(1, limit)).map((r) => Number(r.id))
+  }
+
+  query(q: BookmarkQuery): BookmarkPage {
+    const { where, params } = this.filterFor(q)
     const dir = q.direction === 'asc' ? 'ASC' : 'DESC'
     const order = `${SORT_COLUMNS[q.sort]} ${dir}, b.id ${dir}`
     const limit = Math.max(1, Math.min(q.limit, 1000))

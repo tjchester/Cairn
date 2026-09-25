@@ -62,6 +62,47 @@ describe('bookmarks', () => {
   })
 })
 
+describe('selecting everything a filtered list shows', () => {
+  /** 12 GitHub bookmarks and 3 others, so a "page" of 5 is nowhere near the whole list. */
+  function library() {
+    const repo = makeRepo()
+    for (let i = 0; i < 12; i++) repo.createBookmark({ url: 'https://github.com/org/repo' + i, title: 'Repo ' + i, tags: i % 2 === 0 ? ['code'] : [] })
+    for (const url of ['https://example.com/a', 'https://example.com/b', 'https://news.example/c']) repo.createBookmark({ url })
+    return repo
+  }
+
+  it('returns every id the filter matches, not just the first page', () => {
+    const repo = library()
+    const page = repo.query(q({ search: 'site:github.com', limit: 5 }))
+    expect(page.items).toHaveLength(5)
+    expect(page.total).toBe(12)
+
+    const ids = repo.matchingIds({ scope: { kind: 'all' }, search: 'site:github.com' })
+    expect(ids).toHaveLength(12)
+    expect(new Set(ids).size).toBe(12)
+    expect(repo.matchingIds({ scope: { kind: 'all' } })).toHaveLength(15)
+    expect(repo.matchingIds({ scope: { kind: 'all' }, search: '#code' })).toHaveLength(6)
+  })
+
+  it('follows the same rules as the list itself: collection, trash, and no match', () => {
+    const repo = library()
+    const dev = repo.createCollection({ name: 'Dev' })
+    const ids = repo.matchingIds({ scope: { kind: 'all' }, search: 'site:github.com' })
+    repo.bulkUpdate(ids.slice(0, 4), { collectionId: dev.id })
+    expect(repo.matchingIds({ scope: { kind: 'collection', id: dev.id } })).toHaveLength(4)
+
+    repo.trash(ids.slice(0, 2))
+    expect(repo.matchingIds({ scope: { kind: 'all' }, search: 'site:github.com' })).toHaveLength(10) // trashed ones are gone
+    expect(repo.matchingIds({ scope: { kind: 'trash' } })).toHaveLength(2)
+    expect(repo.matchingIds({ scope: { kind: 'all' }, search: 'site:nothing.example' })).toEqual([])
+  })
+
+  it('will not hand back an unbounded list', () => {
+    const repo = library()
+    expect(repo.matchingIds({ scope: { kind: 'all' } }, 4)).toHaveLength(4)
+  })
+})
+
 describe('trash', () => {
   it('moves to trash, restores and purges only trashed items', () => {
     const repo = makeRepo()

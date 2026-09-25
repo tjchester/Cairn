@@ -21,6 +21,7 @@ const api: CairnApi = {
   },
   bookmarks: {
     query: (query) => invoke('bookmarks:query', query),
+    matchingIds: (query) => invoke('bookmarks:matchingIds', query),
     get: (id) => invoke('bookmarks:get', id),
     findByUrl: (url) => invoke('bookmarks:findByUrl', url),
     create: (input) => invoke('bookmarks:create', input),

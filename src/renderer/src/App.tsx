@@ -125,7 +125,7 @@ export function App(): React.JSX.Element {
       }
       if (mod && e.key.toLowerCase() === 'a') {
         e.preventDefault()
-        return s.selectAll()
+        return void s.selectAll()
       }
       if (mod || e.altKey) return
 

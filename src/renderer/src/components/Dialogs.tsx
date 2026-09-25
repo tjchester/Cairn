@@ -336,7 +336,7 @@ const SHORTCUTS: [string, string][] = [
   ['↑ / ↓', 'Move selection'],
   ['Shift + click', 'Select a range'],
   ['Ctrl/⌘ + click', 'Add to selection'],
-  ['Ctrl/⌘ + A', 'Select all loaded bookmarks'],
+  ['Ctrl/⌘ + A', 'Select everything the list is showing'],
   ['Enter', 'Open selected bookmark in the browser'],
   ['E', 'Edit selected bookmark'],
   ['F', 'Toggle favorite'],

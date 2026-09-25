@@ -858,6 +858,48 @@ describe('Cairn (real app)', () => {
     }
   })
 
+  it('selects every bookmark a filter matches, not just the ones scrolled into view', async () => {
+    const MANY = 130 // more than one page, which is 100
+    await cairn(async (api) => {
+      await api.collections.create({ name: 'Bulk target' })
+      await api.bookmarks.createMany(Array.from({ length: 130 }, (_, i) => ({ url: 'https://bulk.example/page-' + i, title: 'Bulk page ' + i })))
+      return true
+    })
+    await page.reload()
+    await page.waitForSelector('.bm')
+
+    const search = page.getByLabel('Search bookmarks')
+    await search.fill('site:bulk.example')
+    await expect(page.locator('.toolbar-count')).toHaveText(String(MANY))
+    await expect(rows()).toHaveCount(100) // only the first page is on screen
+
+    await page.locator('.bm').first().click()
+    await page.keyboard.press('Control+a')
+    await expect(page.getByText(MANY + ' selected')).toBeVisible()
+    await shot('25-select-all-filtered')
+
+    // A bulk action then reaches all of them, not only the ones that had been loaded.
+    const target = (await cairn((api) => api.collections.list())).find((c) => c.name === 'Bulk target')
+    await page.evaluate(async (collectionId) => {
+      const s = window as unknown as { cairn: typeof window.cairn }
+      const ids = await s.cairn.bookmarks.matchingIds({ scope: { kind: 'all' }, search: 'site:bulk.example' })
+      await s.cairn.bookmarks.bulk(ids, { collectionId })
+    }, target?.id ?? null)
+    await expect.poll(() => cairn((api) => api.data.counts()).then((c) => c.byCollection[target?.id ?? 0] ?? 0)).toBe(MANY)
+
+    await search.fill('')
+    await page.keyboard.press('Escape')
+    await cairn(async (api) => {
+      const ids = await api.bookmarks.matchingIds({ scope: { kind: 'all' }, search: 'site:bulk.example' })
+      await api.bookmarks.trash(ids)
+      await api.bookmarks.purge(ids)
+      const spare = (await api.collections.list()).find((c) => c.name === 'Bulk target')
+      if (spare) await api.collections.remove(spare.id)
+    })
+    await page.reload()
+    await page.waitForSelector('.bm')
+  })
+
   it('has no renderer errors or CSP violations', () => {
     expect(problems).toEqual([])
   })
