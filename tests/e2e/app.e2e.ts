@@ -989,6 +989,43 @@ describe('Cairn (real app)', () => {
     await page.getByLabel('Search bookmarks').fill('')
   })
 
+  it('paints the colour scheme you pick, in light and in dark', async () => {
+    const bg = () => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg').trim())
+    const scheme = () => page.evaluate(() => document.documentElement.dataset.scheme + '/' + document.documentElement.dataset.mode)
+
+    await page.getByRole('button', { name: 'Settings' }).click()
+    const settings = page.getByRole('dialog', { name: 'Settings' })
+    expect(await scheme()).toBe('default/light')
+    const wasBg = await bg()
+
+    await settings.getByRole('radio', { name: 'Ocean' }).click()
+    await expect(settings.getByRole('radio', { name: 'Ocean' })).toBeChecked()
+    expect(await scheme()).toBe('ocean/light')
+    expect(await bg()).not.toBe(wasBg)
+    await shot('28-scheme-ocean')
+
+    // The same scheme has a dark version, which Appearance chooses.
+    await settings.getByRole('button', { name: 'Dark' }).click()
+    await page.emulateMedia({ colorScheme: 'dark' })
+    await expect.poll(scheme).toBe('ocean/dark')
+    const dark = await bg()
+    expect(dark).not.toBe(await page.evaluate(() => '#eef5f5'))
+    await shot('29-scheme-ocean-dark')
+
+    // ...and it is remembered.
+    await page.reload()
+    await page.waitForSelector('.bm')
+    expect(await scheme()).toBe('ocean/dark')
+    expect(await bg()).toBe(dark)
+
+    await page.getByRole('button', { name: 'Settings' }).click()
+    await page.getByRole('dialog', { name: 'Settings' }).getByRole('radio', { name: 'Cairn' }).click()
+    await page.getByRole('dialog', { name: 'Settings' }).getByRole('button', { name: 'Light' }).click()
+    await page.emulateMedia({ colorScheme: 'light' })
+    await expect.poll(scheme).toBe('default/light')
+    await page.keyboard.press('Escape')
+  })
+
   it('has no renderer errors or CSP violations', () => {
     expect(problems).toEqual([])
   })

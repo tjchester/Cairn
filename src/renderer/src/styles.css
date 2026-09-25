@@ -1,4 +1,6 @@
 /* ------------------------------------------------------------------ tokens */
+/* The Cairn scheme, which the renderer replaces with whichever scheme is chosen (see shared/themes.ts). These are
+   what shows for the instant before that happens, and if scripting ever failed. */
 :root {
   color-scheme: light dark;
 
@@ -9,7 +11,7 @@
   --border: #dfe1e8;
   --border-strong: #c9ccd6;
   --text: #1c1e26;
-  --muted: #667085;
+  --muted: #616b80;
   --accent: #3a63e8;
   --accent-text: #ffffff;
   --accent-soft: rgba(58, 99, 232, 0.12);
@@ -1672,4 +1674,79 @@ p.llm-status {
 .tidy-section .check select {
   width: auto;
   display: inline-block;
+}
+
+/* ------------------------------------------------------------ colour schemes */
+.scheme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+.scheme {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+  text-align: left;
+}
+.scheme:hover {
+  background: var(--surface-2);
+}
+.scheme.active {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.scheme-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+/* A miniature of the app: sidebar, a card with two lines of text, and the accent. */
+.scheme-swatch {
+  position: relative;
+  flex: none;
+  display: block;
+  width: 46px;
+  height: 32px;
+  border: 1px solid;
+  border-radius: 5px;
+  overflow: hidden;
+}
+.scheme-bar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 13px;
+}
+.scheme-card {
+  position: absolute;
+  inset: 5px 4px 5px 17px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  padding: 0 3px;
+  border: 1px solid;
+  border-radius: 3px;
+}
+.scheme-line {
+  height: 2px;
+  border-radius: 1px;
+}
+.scheme-line.short {
+  width: 60%;
+}
+.scheme-dot {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
 }

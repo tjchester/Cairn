@@ -44,6 +44,15 @@ describe('settings', () => {
     expect(() => applySettingsPatch(repo, { tagging: { llm: { allowRemote: false } } })).toThrow(/Ollama address/)
   })
 
+  it('takes a colour scheme it knows and refuses one it does not', () => {
+    const repo = makeRepo()
+    expect(readSettings(repo).scheme).toBe('default')
+    applySettingsPatch(repo, { scheme: 'ocean' })
+    expect(readSettings(repo).scheme).toBe('ocean')
+    expect(() => applySettingsPatch(repo, { scheme: 'chartreuse' })).toThrow()
+    expect(readSettings(repo).scheme).toBe('ocean')
+  })
+
   it('rejects out-of-range or unknown values', () => {
     const repo = makeRepo()
     expect(() => applySettingsPatch(repo, { tagging: { maxTags: 99 } })).toThrow()

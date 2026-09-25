@@ -8,6 +8,7 @@ import {
   type SettingsPatch,
   type TaggingSettings
 } from '@shared/types'
+import { SCHEMES } from '@shared/themes'
 import type { Repo } from './db/repo'
 import { validateBaseUrl } from './tagging/ollama'
 import { parseUserRules } from './tagging/rules'
@@ -48,6 +49,7 @@ const apiPatchSchema = apiSchema.partial().strict()
 const simpleSettings = z
   .object({
     theme: z.enum(['system', 'light', 'dark']),
+    scheme: z.string().max(40).refine((id) => SCHEMES.some((s) => s.id === id), 'Unknown colour scheme'),
     view: z.enum(['list', 'grid', 'headlines']),
     sort: sortKey,
     direction,
@@ -82,9 +84,14 @@ function readJson<T>(raw: string | undefined, schema: z.ZodType<T>): T | null {
 
 export function readSettings(repo: Repo): Settings {
   const raw = repo.getSettingsRaw()
+  const shape = simpleSettings.shape as Record<string, z.ZodType>
   const flat: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(raw)) {
-    if (SIMPLE_KEYS.has(key)) flat[key] = NUMBER_KEYS.has(key) ? Number(value) : BOOLEAN_KEYS.has(key) ? value === 'true' : value
+    if (!SIMPLE_KEYS.has(key)) continue
+    // One unreadable value falls back on its own, rather than taking every other setting down with it.
+    const typed = NUMBER_KEYS.has(key) ? Number(value) : BOOLEAN_KEYS.has(key) ? value === 'true' : value
+    const checked = shape[key]?.safeParse(typed)
+    if (checked?.success) flat[key] = checked.data
   }
   const parsed = simpleSettings.safeParse(flat)
 
@@ -112,6 +119,8 @@ export function applySettingsPatch(repo: Repo, patch: SettingsPatch): Settings {
     if (!next.success) throw new Error('The port must be a number between 1024 and 65535.')
     repo.setSettingRaw('api', JSON.stringify(next.data))
   }
-  for (const [key, value] of Object.entries(simple)) repo.setSettingRaw(key, String(value))
+  const checked = simpleSettings.safeParse(simple)
+  if (!checked.success) throw new Error('That setting is not one Cairn knows: ' + (checked.error.issues[0]?.path.join('.') ?? 'unknown'))
+  for (const [key, value] of Object.entries(checked.data)) repo.setSettingRaw(key, String(value))
   return readSettings(repo)
 }

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, BrowserWindow, nativeTheme, session, shell } from 'electron'
+import { findScheme } from '@shared/themes'
 import type { JobProgress, MenuAction, ThemeSetting } from '@shared/types'
 import { ApiController } from './api/controller'
 import { IngestService } from './api/ingest'
@@ -109,7 +110,8 @@ if (!app.requestSingleInstanceLock()) {
     })
 
     const open = (): void => {
-      mainWindow = createMainWindow(nativeTheme.shouldUseDarkColors ? '#1b1c20' : '#f6f6f8')
+      const palette = findScheme(readSettings(repo).scheme)
+      mainWindow = createMainWindow(nativeTheme.shouldUseDarkColors ? palette.dark.bg : palette.light.bg)
       mainWindow.on('closed', () => (mainWindow = null))
     }
     open()

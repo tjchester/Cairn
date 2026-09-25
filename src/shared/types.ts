@@ -343,6 +343,8 @@ export interface CaptureEvent {
 
 export interface Settings {
   theme: ThemeSetting
+  /** Which colour scheme to paint with (see `SCHEMES` in shared/themes). Light or dark is still `theme`. */
+  scheme: string
   view: ViewMode
   sort: SortKey
   direction: SortDirection
@@ -362,6 +364,7 @@ export type SettingsPatch = Partial<Omit<Settings, 'tagging' | 'api'>> & {
 
 export const DEFAULT_SETTINGS: Settings = {
   theme: 'system',
+  scheme: 'default',
   view: 'list',
   sort: 'title',
   direction: 'asc',

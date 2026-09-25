@@ -17,6 +17,7 @@ import {
 } from '@shared/types'
 import type { IconName } from './icons'
 import { byName } from '@shared/collections'
+import { useScheme } from './theme'
 import { errorMessage, sameScope } from './util'
 
 const api = window.cairn
@@ -224,6 +225,7 @@ export const useStore = create<Store>((set, get) => {
 
     async reloadSettings() {
       const settings = await api.settings.get()
+      useScheme(settings.scheme)
       set({ settings })
     },
 
@@ -311,6 +313,7 @@ export const useStore = create<Store>((set, get) => {
         return
       }
       set({ settings: saved })
+      useScheme(saved.scheme)
       if (patch.sort !== undefined || patch.direction !== undefined) await get().reload()
     },
 

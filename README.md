@@ -39,7 +39,9 @@ Raindrop.io. It shares no code or assets with them and is not affiliated with an
 - **Broken-link checker and "fetch missing details"** – background jobs with progress and cancel that are polite and
   resilient (see *Bulk requests* below).
 - **Trash with undo**, multi-select and bulk actions, favorites, notes, keyboard shortcuts (press `Ctrl/⌘ + /`).
-- **Light / dark theme**, remembers window size and layout.
+- **Seven colour schemes** (Cairn, Slate, Ocean, Forest, Sand, Violet, High contrast), each with a light and a dark
+  version; *Match system / Light / Dark* still chooses which one you see. Every palette is checked against the WCAG AA
+  contrast rules by a test. Remembers window size and layout.
 
 ## Getting started
 

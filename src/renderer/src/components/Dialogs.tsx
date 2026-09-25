@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { ApiStatus, Bookmark, JobKind, LlmSettings, OllamaStatus, StartJobOptions, TagRunInfo, TaggingMode, ThemeSetting, TidyLogInfo } from '@shared/types'
+import { SCHEMES } from '@shared/themes'
 import { Icon } from '../icons'
+import { currentMode } from '../theme'
 import { useStore } from '../store'
 import { errorMessage, formatDate } from '../util'
 import { Favicon, Modal } from './ui'
@@ -32,6 +34,35 @@ export function SettingsDialog(): React.JSX.Element {
               {t.label}
             </button>
           ))}
+        </div>
+
+        <p className="muted settings-note">Each scheme comes in a light and a dark version; the setting above chooses which one you see.</p>
+        <div className="scheme-grid" role="radiogroup" aria-label="Colour scheme">
+          {SCHEMES.map((scheme) => {
+            const chosen = s.settings.scheme === scheme.id
+            const preview = currentMode() === 'dark' ? scheme.dark : scheme.light
+            return (
+              <button
+                key={scheme.id}
+                className={'scheme' + (chosen ? ' active' : '')}
+                role="radio"
+                aria-checked={chosen}
+                title={scheme.note}
+                onClick={() => void s.updateSettings({ scheme: scheme.id })}
+              >
+                <span className="scheme-swatch" style={{ background: preview.bg, borderColor: preview.border }}>
+                  <span className="scheme-bar" style={{ background: preview.sidebar }} />
+                  <span className="scheme-card" style={{ background: preview.surface, borderColor: preview.border }}>
+                    <span className="scheme-line" style={{ background: preview.text }} />
+                    <span className="scheme-line short" style={{ background: preview.muted }} />
+                  </span>
+                  <span className="scheme-dot" style={{ background: preview.accent }} />
+                </span>
+                <span className="scheme-name">{scheme.name}</span>
+                {chosen && <Icon name="check" size={13} />}
+              </button>
+            )
+          })}
         </div>
       </section>
 
