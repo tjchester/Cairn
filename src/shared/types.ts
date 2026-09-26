@@ -80,6 +80,8 @@ export interface BookmarkQuery {
   search?: string
   /** Show what is in the Archive as well. Off by default, except when you are looking inside the Archive. */
   includeArchived?: boolean
+  /** Looking at a collection: only what is filed in it, leaving out its sub-collections. Off by default. */
+  directOnly?: boolean
   sort: SortKey
   direction: SortDirection
   limit: number
@@ -424,7 +426,7 @@ export interface CairnApi {
   bookmarks: {
     query(query: BookmarkQuery): Promise<BookmarkPage>
     /** The ids of every bookmark matching a scope and search, however much of the list has been loaded. */
-    matchingIds(query: { scope: Scope; search?: string; includeArchived?: boolean }): Promise<number[]>
+    matchingIds(query: { scope: Scope; search?: string; includeArchived?: boolean; directOnly?: boolean }): Promise<number[]>
     get(id: number): Promise<Bookmark | null>
     findByUrl(url: string): Promise<Bookmark | null>
     create(input: BookmarkInput): Promise<Bookmark>

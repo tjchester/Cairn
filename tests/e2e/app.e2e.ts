@@ -989,6 +989,61 @@ describe('Cairn (real app)', () => {
     await page.getByLabel('Search bookmarks').fill('')
   })
 
+  it('can show a collection on its own, without its sub-collections', async () => {
+    await cairn(async (api) => {
+      const cooking = await api.collections.create({ name: 'Cooking' })
+      const baking = await api.collections.create({ name: 'Baking', parentId: cooking.id })
+      await api.bookmarks.create({ url: 'https://cooking.example/knives', title: 'Choosing a knife', collectionId: cooking.id })
+      await api.bookmarks.create({ url: 'https://cooking.example/sourdough', title: 'Sourdough from scratch', collectionId: baking.id })
+      return true
+    })
+    await page.reload()
+    await page.waitForSelector('.bm')
+
+    // The button is only there when a collection is what you are looking at.
+    const onlyThis = page.getByRole('button', { name: 'Leave out sub-collections' })
+    await expect(onlyThis).toHaveCount(0)
+
+    await page.locator('.nav-item', { hasText: 'Cooking' }).first().click()
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Cooking')
+    await expect(rows()).toHaveCount(2) // its own, and Baking's
+    await expect(page.locator('.toolbar-count')).toHaveText('2')
+
+    await onlyThis.click()
+    await expect(onlyThis).toHaveAttribute('aria-pressed', 'true')
+    await expect(rows()).toHaveCount(1)
+    await expect(rows().first()).toContainText('Choosing a knife')
+    await expect(page.locator('.toolbar-count')).toHaveText('1')
+    await shot('31-collection-without-subfolders')
+
+    // Selecting everything now covers only what the list shows, not what is below it.
+    await page.locator('.bm').first().click()
+    await page.keyboard.press('Control+a')
+    await expect(page.locator('.bm.selected')).toHaveCount(1)
+    await page.keyboard.press('Escape')
+
+    await onlyThis.click()
+    await expect(onlyThis).toHaveAttribute('aria-pressed', 'false')
+    await expect(rows()).toHaveCount(2)
+
+    await page.locator('.nav-item', { hasText: 'All bookmarks' }).click()
+    await cairn(async (api) => {
+      const all = await api.collections.list()
+      const cooking = all.find((c) => c.name === 'Cooking')
+      const baking = all.find((c) => c.name === 'Baking')
+      if (cooking) {
+        const ids = await api.bookmarks.matchingIds({ scope: { kind: 'collection', id: cooking.id } })
+        await api.bookmarks.trash(ids)
+        await api.bookmarks.purge(ids)
+      }
+      if (baking) await api.collections.remove(baking.id)
+      if (cooking) await api.collections.remove(cooking.id)
+      return true
+    })
+    await page.reload()
+    await page.waitForSelector('.bm')
+  })
+
   it('paints the colour scheme you pick, in light and in dark', async () => {
     const bg = () => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg').trim())
     const scheme = () => page.evaluate(() => document.documentElement.dataset.scheme + '/' + document.documentElement.dataset.mode)

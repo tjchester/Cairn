@@ -667,6 +667,11 @@ describe('reading the library', () => {
     expect((await read('/api/v1/bookmarks?scope=collection:Dev/Rust')).json.total).toBe(2)
     expect((await read('/api/v1/bookmarks?scope=tag:rust')).json.bookmarks[0].title).toBe('Repo one')
     expect((await read('/api/v1/bookmarks?archived=1')).json.total).toBe(4)
+
+    expect((await read('/api/v1/bookmarks?scope=collection:Dev')).json.total).toBe(2) // what is in Dev/Rust counts as Dev's too
+    expect((await read('/api/v1/bookmarks?scope=collection:Dev&direct=1')).json.total).toBe(0) // nothing is filed in Dev itself
+    expect((await read('/api/v1/bookmarks?scope=collection:Archive')).json.total).toBe(1) // the archived one, mirrored into Archive/Dev
+    expect((await read('/api/v1/bookmarks?scope=collection:Archive&direct=1')).json.total).toBe(0)
   })
 
   it('pages and sorts', async () => {

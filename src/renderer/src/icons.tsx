@@ -16,6 +16,7 @@ import {
   IconFolder,
   IconFolderOpen,
   IconFolderPlus,
+  IconFolders,
   IconFolderShare,
   IconFolderX,
   IconInfoCircle,
@@ -53,6 +54,7 @@ import {
 const ICONS = {
   bookmark: IconBookmark,
   folder: IconFolder,
+  folders: IconFolders,
   folderOpen: IconFolderOpen,
   addFolder: IconFolderPlus,
   deleteFolder: IconFolderX,

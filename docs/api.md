@@ -108,6 +108,7 @@ Searches, exactly as the app's own list does. Headers: `Authorization: Bearer <r
 | `direction` | `desc` (default) or `asc` |
 | `limit`, `offset` | 1–1000 (default 50), and where to start |
 | `archived` | include what is in the Archive (left out by default) |
+| `direct` | with `scope=collection:…`, only what is filed in that collection, leaving out its sub-collections |
 
 ```json
 { "total": 1530, "limit": 50, "offset": 0, "bookmarks": [ { "id": 42, "url": "…", "title": "…", "collection": "Dev/Rust", "tags": ["rust"] } ] }
@@ -143,6 +144,7 @@ address; it is not used by scripts.
 ```
 cairn search rust async --limit 5     search (the app's own syntax works: #tag site:example.com is:favorite)
 cairn search --scope collection:Dev/Rust --sort title --asc
+cairn search --scope collection:Dev --direct   only what is filed in Dev itself, not in what is under it
 cairn get 1428                        one bookmark in full
 cairn collections                     the tree, with how many bookmarks each holds
 cairn tags --limit 20                 the tags you use, most used first

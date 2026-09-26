@@ -149,6 +149,34 @@ describe('collections', () => {
     expect(repo.getCollection(rust.id)?.parentId).toBe(misc.id)
   })
 
+  it('can leave the sub-collections out of a collection', () => {
+    const repo = makeRepo()
+    const dev = repo.createCollection({ name: 'Dev' })
+    const rust = repo.createCollection({ name: 'Rust', parentId: dev.id })
+    const async_ = repo.createCollection({ name: 'Async', parentId: rust.id })
+    repo.createBookmark({ url: 'https://a.com', collectionId: dev.id })
+    repo.createBookmark({ url: 'https://b.com', collectionId: rust.id })
+    repo.createBookmark({ url: 'https://c.com', collectionId: async_.id })
+    repo.createBookmark({ url: 'https://d.com' })
+
+    const inDev = (directOnly?: boolean) => repo.query(q({ scope: { kind: 'collection', id: dev.id }, directOnly }))
+    expect(inDev().total).toBe(3)
+    expect(inDev(false).total).toBe(3)
+    expect(inDev(true).total).toBe(1)
+    expect(inDev(true).items.map((b) => b.url)).toEqual(['https://a.com/'])
+    expect(repo.query(q({ scope: { kind: 'collection', id: rust.id }, directOnly: true })).items.map((b) => b.url)).toEqual(['https://b.com/'])
+    expect(repo.query(q({ scope: { kind: 'collection', id: async_.id }, directOnly: true })).total).toBe(1) // no children of its own
+
+    // Selecting everything the list shows follows the same rule, and a search still applies.
+    expect(repo.matchingIds({ scope: { kind: 'collection', id: dev.id } })).toHaveLength(3)
+    expect(repo.matchingIds({ scope: { kind: 'collection', id: dev.id }, directOnly: true })).toHaveLength(1)
+    expect(repo.query(q({ scope: { kind: 'collection', id: dev.id }, directOnly: true, search: 'site:b.com' })).total).toBe(0)
+
+    // It says nothing about the other scopes.
+    expect(repo.query(q({ directOnly: true })).total).toBe(4)
+    expect(repo.query(q({ scope: { kind: 'unsorted' }, directOnly: true })).total).toBe(1)
+  })
+
   it('refuses to move a collection into itself or a descendant', () => {
     const repo = makeRepo()
     const a = repo.createCollection({ name: 'A' })

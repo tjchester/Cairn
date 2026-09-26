@@ -42,6 +42,7 @@ const query = z.object({
   scope,
   search: text(500).optional(),
   includeArchived: z.boolean().optional(),
+  directOnly: z.boolean().optional(),
   sort: sortKey,
   direction,
   limit: z.number().int().min(1).max(1000),
@@ -164,7 +165,7 @@ export function registerIpc(ctx: IpcContext): void {
 
   // bookmarks
   handle('bookmarks:query', z.tuple([query]), ([q]) => repo.query(q))
-  handle('bookmarks:matchingIds', z.tuple([z.object({ scope, search: text(500).optional(), includeArchived: z.boolean().optional() })]), ([q]) => repo.matchingIds(q))
+  handle('bookmarks:matchingIds', z.tuple([z.object({ scope, search: text(500).optional(), includeArchived: z.boolean().optional(), directOnly: z.boolean().optional() })]), ([q]) => repo.matchingIds(q))
   handle('bookmarks:get', z.tuple([id]), ([bookmarkId]) => repo.getBookmark(bookmarkId))
   handle('bookmarks:findByUrl', z.tuple([text(4096)]), ([url]) => repo.findByUrl(url))
   handle('bookmarks:create', z.tuple([bookmarkInput]), ([input]) => repo.createBookmark(input))

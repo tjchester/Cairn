@@ -8,7 +8,7 @@ Raindrop.io. It shares no code or assets with them and is not affiliated with an
 
 ## Features
 
-- **Collections** – nested and colorable, always listed A–Z; drag one onto another to file it inside, or onto the *Collections* heading to bring it back to the top. Deleting one sends its bookmarks to the Trash, and *Tools → Tidy collections* clears out the ones holding no bookmarks at all (it shows what would go, and can be undone).
+- **Collections** – nested and colorable, always listed A–Z; drag one onto another to file it inside, or onto the *Collections* heading to bring it back to the top. Choosing one shows what is in it and in everything below it; the folder button beside the search box leaves the sub-collections out, for when you want the parent on its own. Deleting one sends its bookmarks to the Trash, and *Tools → Tidy collections* clears out the ones holding no bookmarks at all (it shows what would go, and can be undone).
 - **Tags** – listed A–Z, autocomplete, rename/merge/delete, drag bookmarks onto a tag to apply it.
 - **A sidebar you can fold up** – the *Collections* and *Tags* headings each have an arrow that closes just that list (it says how many it is hiding, and remembers your choice). Hiding the whole sidebar is still `Ctrl/⌘ + B`.
 - **Archive** – one collection for what you keep but no longer use; it stays out of your way (see *The Archive* below).

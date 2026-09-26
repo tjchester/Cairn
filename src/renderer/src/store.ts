@@ -64,6 +64,8 @@ interface Store {
   search: string
   /** Show what is in the Archive in the ordinary lists as well. Off by default, and not remembered. */
   includeArchived: boolean
+  /** In a collection, leave out what is filed in its sub-collections. Off by default, and not remembered. */
+  directOnly: boolean
   items: Bookmark[]
   total: number
   loading: boolean
@@ -87,6 +89,7 @@ interface Store {
   setScope(scope: Scope): void
   setSearch(text: string): void
   setIncludeArchived(on: boolean): void
+  setDirectOnly(on: boolean): void
   /** Sends bookmarks to the Archive (or brings them back), rebuilding the folders they were in. */
   archiveBookmarks(ids: number[]): Promise<void>
   restoreBookmarks(ids: number[]): Promise<void>
@@ -203,6 +206,7 @@ export const useStore = create<Store>((set, get) => {
     scope: { kind: 'all' },
     search: '',
     includeArchived: false,
+    directOnly: false,
     items: [],
     total: 0,
     loading: false,
@@ -235,7 +239,7 @@ export const useStore = create<Store>((set, get) => {
       const limit = options.keepDepth ? Math.min(MAX_DEPTH, Math.max(PAGE_SIZE, items.length)) : PAGE_SIZE
       set({ loading: true })
       try {
-        const page = await api.bookmarks.query({ scope, search, includeArchived: get().includeArchived, sort: settings.sort, direction: settings.direction, limit, offset: 0 })
+        const page = await api.bookmarks.query({ scope, search, includeArchived: get().includeArchived, directOnly: get().directOnly, sort: settings.sort, direction: settings.direction, limit, offset: 0 })
         if (seq !== requestSeq) return
         const present = new Set(page.items.map((b) => b.id))
         // Forget bookmarks that have gone, but only when this page is the whole list: a selection may reach past it.
@@ -260,7 +264,7 @@ export const useStore = create<Store>((set, get) => {
       loadingMore = true
       const seq = requestSeq
       try {
-        const page = await api.bookmarks.query({ scope, search, includeArchived: get().includeArchived, sort: settings.sort, direction: settings.direction, limit: PAGE_SIZE, offset: items.length })
+        const page = await api.bookmarks.query({ scope, search, includeArchived: get().includeArchived, directOnly: get().directOnly, sort: settings.sort, direction: settings.direction, limit: PAGE_SIZE, offset: items.length })
         if (seq !== requestSeq) return
         set((s) => {
           const known = new Set(s.items.map((b) => b.id))
@@ -319,6 +323,11 @@ export const useStore = create<Store>((set, get) => {
 
     setIncludeArchived(on) {
       set({ includeArchived: on })
+      void get().reload()
+    },
+
+    setDirectOnly(on) {
+      set({ directOnly: on })
       void get().reload()
     },
 
@@ -399,8 +408,8 @@ export const useStore = create<Store>((set, get) => {
     },
     async selectAll() {
       // Everything the list is showing, not only the part that has been scrolled into view.
-      const { scope, search, includeArchived } = get()
-      const ids = await guard(() => api.bookmarks.matchingIds({ scope, search, includeArchived }))
+      const { scope, search, includeArchived, directOnly } = get()
+      const ids = await guard(() => api.bookmarks.matchingIds({ scope, search, includeArchived, directOnly }))
       set({ selected: new Set(ids ?? get().items.map((b) => b.id)) })
     },
     clearSelection() {

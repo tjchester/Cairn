@@ -82,6 +82,18 @@ export function Toolbar({ searchRef }: { searchRef: React.RefObject<HTMLInputEle
           </button>
         )}
 
+        {s.scope.kind === 'collection' && (
+          <button
+            className={'icon-btn' + (s.directOnly ? ' on' : '')}
+            aria-pressed={s.directOnly}
+            title={s.directOnly ? 'Showing only what is filed in this collection' : 'Showing this collection and its sub-collections'}
+            aria-label="Leave out sub-collections"
+            onClick={() => s.setDirectOnly(!s.directOnly)}
+          >
+            <Icon name={s.directOnly ? 'folder' : 'folders'} />
+          </button>
+        )}
+
         <button
           className={'icon-btn' + (s.includeArchived ? ' on' : '')}
           aria-pressed={s.includeArchived}

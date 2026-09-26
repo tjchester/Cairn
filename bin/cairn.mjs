@@ -32,6 +32,7 @@ Options
   --sort S                   created (default), updated, title, domain
   --asc, --desc              which way round
   --archived                 include what is in the Archive
+  --direct                   with --scope collection:…, leave out its sub-collections
   --json                     print the answer as JSON
   --url U, --key K           where Cairn is, and the read key (otherwise found automatically)
   -h, --help                 this
@@ -108,6 +109,7 @@ function searchQuery(words, options) {
   if (options.asc) params.set('direction', 'asc')
   if (options.desc) params.set('direction', 'desc')
   if (options.archived) params.set('archived', '1')
+  if (options.direct) params.set('direct', '1')
   return '/api/v1/bookmarks?' + params.toString()
 }
 

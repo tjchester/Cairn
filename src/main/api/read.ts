@@ -85,6 +85,7 @@ export function searchBookmarks(repo: Repo, params: URLSearchParams): Record<str
     scope: parseScope(params.get('scope'), repo),
     search: params.get('q') ?? params.get('search') ?? '',
     includeArchived: flag(params, 'archived') || flag(params, 'includeArchived'),
+    directOnly: flag(params, 'direct') || flag(params, 'directOnly'),
     sort: sortRaw,
     direction,
     limit,

@@ -112,6 +112,8 @@ describe('the command-line tool', () => {
     expect((await cli(['search', 'site:github.com', ...where])).out).toContain('A tool')
     expect((await cli(['search', '--scope', 'favorites', ...where])).out).toContain('A tool')
     expect((await cli(['search', '--scope', 'collection:Dev/Rust', '--limit', '1', ...where])).out).toContain('1 of 2 (--offset 1 for more)')
+    expect((await cli(['search', '--scope', 'collection:Dev', ...where])).out).toContain('2 of 2') // Dev/Rust's two count as Dev's
+    expect((await cli(['search', '--scope', 'collection:Dev', '--direct', ...where])).out).toBe('Nothing matched.') // nothing is filed in Dev itself
     expect((await cli(['search', 'nothing-like-this', ...where])).out).toBe('Nothing matched.')
   })
 

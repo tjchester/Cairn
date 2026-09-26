@@ -785,10 +785,10 @@ export class Repo {
   // ------------------------------------------------------------------- query
 
   /** The WHERE clause (and its parameters) for a scope and search box: what "the list you are looking at" means. */
-  private filterFor(q: { scope: Scope; search?: string; includeArchived?: boolean }): { where: string; params: SqlValue[] } {
+  private filterFor(q: { scope: Scope; search?: string; includeArchived?: boolean; directOnly?: boolean }): { where: string; params: SqlValue[] } {
     const clauses: string[] = []
     const params: SqlValue[] = []
-    this.applyScope(q.scope, clauses, params)
+    this.applyScope(q.scope, clauses, params, q.directOnly === true)
 
     const parsed = parseSearch(q.search ?? '')
     const search = buildSearchClauses(parsed)
@@ -807,7 +807,7 @@ export class Repo {
    * Every bookmark the current list would show, however far it has been scrolled: what "select all" means.
    * Ids only, so a selection of thousands costs little.
    */
-  matchingIds(q: { scope: Scope; search?: string; includeArchived?: boolean }, limit = 200_000): number[] {
+  matchingIds(q: { scope: Scope; search?: string; includeArchived?: boolean; directOnly?: boolean }, limit = 200_000): number[] {
     const { where, params } = this.filterFor(q)
     return this.all(`SELECT b.id FROM bookmarks b ${where} ORDER BY b.id LIMIT ?`, ...params, Math.max(1, limit)).map((r) => Number(r.id))
   }
@@ -824,7 +824,8 @@ export class Repo {
     return { items, total }
   }
 
-  private applyScope(scope: Scope, clauses: string[], params: SqlValue[]): void {
+  /** `directOnly` narrows a collection to what is filed in it, rather than everything below it as well. */
+  private applyScope(scope: Scope, clauses: string[], params: SqlValue[], directOnly = false): void {
     if (scope.kind === 'trash') {
       clauses.push('b.deleted_at IS NOT NULL')
       return
@@ -844,7 +845,9 @@ export class Repo {
         break
       case 'collection':
         clauses.push(
-          `b.collection_id IN (
+          directOnly
+            ? 'b.collection_id = ?'
+            : `b.collection_id IN (
              WITH RECURSIVE sub(id) AS (
                SELECT ? UNION ALL SELECT c.id FROM collections c JOIN sub ON c.parent_id = sub.id
              ) SELECT id FROM sub)`
