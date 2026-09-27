@@ -57,7 +57,7 @@ function useRowActions() {
         ? { label: many ? 'Bring ' + ids.length + ' back from the Archive' : 'Restore from Archive', icon: 'undo', onClick: () => void store.restoreBookmarks(ids) }
         : { label: many ? 'Send ' + ids.length + ' bookmarks to the Archive' : 'Send to Archive', icon: 'archive', onClick: () => void store.archiveBookmarks(ids) },
       { label: bookmark.favorite && !many ? 'Remove from favorites' : 'Add to favorites', icon: 'favorite', onClick: () => void store.toggleFavorite(ids) },
-      { label: 'Move to…', icon: 'moveToFolder', onClick: () => setTimeout(() => moveMenu(x, y), 0) },
+      { label: 'Move to…', icon: 'moveToFolder', onClick: () => moveMenu(x, y) },
       { separator: true },
       { label: many ? `Move ${ids.length} bookmarks to Trash` : 'Move to Trash', icon: 'trash', danger: true, onClick: () => void store.trashIds(ids) }
     ])

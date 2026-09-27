@@ -900,6 +900,64 @@ describe('Cairn (real app)', () => {
     await page.waitForSelector('.bm')
   })
 
+  it('moves a whole selection from the bulk bar, and closes the menu the usual ways', async () => {
+    await cairn(async (api) => {
+      await api.collections.create({ name: 'Moving day' })
+      await api.bookmarks.createMany([
+        { url: 'https://move.example/one', title: 'Moving one' },
+        { url: 'https://move.example/two', title: 'Moving two' }
+      ])
+      return true
+    })
+    await page.reload()
+    await page.waitForSelector('.bm')
+    const search = page.getByLabel('Search bookmarks')
+    await search.fill('site:move.example')
+    await expect(rows()).toHaveCount(2)
+
+    const menu = page.locator('.context-menu')
+    const moveTo = page.getByRole('button', { name: 'Move to…' })
+    await rows().nth(0).click()
+    await rows().nth(1).click({ modifiers: ['Control'] })
+
+    // The button's own click must not close the menu it just opened.
+    await moveTo.click()
+    await expect(menu).toBeVisible()
+    await expect(menu.getByRole('menuitem', { name: 'Moving day' })).toBeVisible()
+    await shot('33-bulk-move-menu')
+
+    // The arrows walk the menu without moving the selection behind it, and Escape closes the menu only:
+    // it does not also clear the selection.
+    await page.keyboard.press('ArrowDown')
+    await expect(page.getByText('2 selected')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(menu).toHaveCount(0)
+    await expect(page.getByText('2 selected')).toBeVisible()
+    await moveTo.click()
+    await expect(menu).toBeVisible()
+    await page.locator('.toolbar-title').click()
+    await expect(menu).toHaveCount(0)
+
+    // Choosing a collection moves everything that was selected.
+    await moveTo.click()
+    await menu.getByRole('menuitem', { name: 'Moving day' }).click()
+    await expect(menu).toHaveCount(0)
+    const target = (await cairn((api) => api.collections.list())).find((c) => c.name === 'Moving day')
+    await expect.poll(() => cairn((api) => api.data.counts()).then((c) => c.byCollection[target?.id ?? 0] ?? 0)).toBe(2)
+
+    await search.fill('')
+    await cairn(async (api) => {
+      const ids = await api.bookmarks.matchingIds({ scope: { kind: 'all' }, search: 'site:move.example' })
+      await api.bookmarks.trash(ids)
+      await api.bookmarks.purge(ids)
+      const spare = (await api.collections.list()).find((c) => c.name === 'Moving day')
+      if (spare) await api.collections.remove(spare.id)
+      return true
+    })
+    await page.reload()
+    await page.waitForSelector('.bm')
+  })
+
   it('keeps things in the Archive: out of the lists, but filed the way they were', async () => {
     await cairn(async (api) => {
       const menus = await api.collections.create({ name: 'Menus' })

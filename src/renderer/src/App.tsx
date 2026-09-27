@@ -220,7 +220,6 @@ export function App(): React.JSX.Element {
       onDragOver={onDragOver}
       onDragLeave={(e) => e.currentTarget === e.target && setDropActive(false)}
       onDrop={onDrop}
-      onClick={() => store.getState().hideContext()}
     >
       {sidebarOpen && (
         <>

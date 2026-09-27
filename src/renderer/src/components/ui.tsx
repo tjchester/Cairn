@@ -124,15 +124,25 @@ export function ContextMenu(): React.JSX.Element | null {
     ref.current.querySelector<HTMLButtonElement>('button:not([disabled])')?.focus()
   }, [context])
 
+  // Closing the menu belongs here and nowhere else. A parent that closed it on every click would also close the
+  // menu a button had just opened, because that button's own click bubbles up to the parent (mousedown happens
+  // before the menu exists, so this listener cannot make that mistake).
   useEffect(() => {
     if (!context) return
     const onDown = (e: MouseEvent): void => {
       if (!ref.current?.contains(e.target as Node)) hide()
     }
+    // While the menu is up it owns these keys: they must not also reach the window shortcuts behind it, where
+    // Escape would clear the selection, the arrows would move it, and Enter would open the bookmark as well.
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') hide()
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        hide()
+      }
+      if (e.key === 'Enter' || e.key === ' ') e.stopPropagation() // the focused item still takes it
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault()
+        e.stopPropagation()
         const buttons = [...(ref.current?.querySelectorAll<HTMLButtonElement>('button:not([disabled])') ?? [])]
         const at = buttons.indexOf(document.activeElement as HTMLButtonElement)
         const next = e.key === 'ArrowDown' ? at + 1 : at - 1
