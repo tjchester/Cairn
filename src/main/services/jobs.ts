@@ -8,6 +8,7 @@ import type { TaggingService } from '../tagging/service'
 import {
   EMPTY_SIGNALS,
   attemptLink,
+  classifyHttpStatus,
   fetchMetadata,
   isRateLimitStatus,
   isTransientStatus,
@@ -282,7 +283,7 @@ export class JobRunner {
     if (this.active) return null
     const job: ActiveJob = { id: randomUUID(), kind, controller: new AbortController() }
     this.active = job
-    const run = kind === 'auto-tag' ? this.executeAutoTag(job, options) : this.execute(job)
+    const run = kind === 'auto-tag' ? this.executeAutoTag(job, options) : this.execute(job, options)
     void run.finally(() => {
       if (this.active === job) this.active = null
     })
@@ -404,14 +405,19 @@ export class JobRunner {
     }
   }
 
-  private async execute(job: ActiveJob): Promise<void> {
+  private async execute(job: ActiveJob, options: StartJobOptions = {}): Promise<void> {
     const { clock, random } = this.deps
     const isLinkCheck = job.kind === 'check-links'
     const tuning = isLinkCheck ? this.options.linkCheck : this.options.metadata
     const signal = job.controller.signal
 
+    // Over one collection, every bookmark in it is fetched again; over the whole library, only those never fetched.
+    const within = options.collectionId
+    const scopeNote =
+      within === undefined ? undefined : 'Only the bookmarks in “' + (this.repo.getCollection(within)?.name ?? 'this collection') + '” and anything below it.'
+
     // Spread each site's bookmarks over the whole run instead of visiting them back to back.
-    const tasks: Task[] = interleaveByHost(this.repo.listForJob(isLinkCheck ? 'all' : 'missing-metadata'), random).map((item) => ({
+    const tasks: Task[] = interleaveByHost(this.repo.listForJob(isLinkCheck || within !== undefined ? 'all' : 'missing-metadata', within), random).map((item) => ({
       id: item.id,
       url: item.url,
       host: domainOf(item.url) || item.url,
@@ -468,7 +474,7 @@ export class JobRunner {
         ? 'No internet connection. Waiting for it to come back; the task will resume by itself.'
         : scheduler.coolingHosts() > 0
           ? 'Some sites asked us to slow down. Waiting before trying them again.'
-          : undefined
+          : scopeNote
       this.emit({ ...progress })
     }
 
@@ -547,6 +553,10 @@ export class JobRunner {
               )
               if (outcome.kind === 'cancelled') return
               if (outcome.kind === 'defer') return { deferMs: outcome.ms }
+              // The page answered, so we know as much about the link as a link check would: record it.
+              if (outcome.kind === 'done' && outcome.value.status !== null && !isTransientStatus(outcome.value.status)) {
+                this.repo.setLinkStatus(task.id, classifyHttpStatus(outcome.value.status), outcome.value.status)
+              }
               if (outcome.kind === 'done' && outcome.value.status !== null && outcome.value.status < 400) {
                 this.repo.applyMetadata(task.id, { ...outcome.value, signals: outcome.value.signals ?? EMPTY_SIGNALS })
                 updated++

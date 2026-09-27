@@ -1226,9 +1226,19 @@ export class Repo {
    * (no stored page signals): pages that answered but have no cover image are not asked again, while failed
    * lookups stay in the list until they succeed.
    */
-  listForJob(kind: 'all' | 'missing-metadata'): { id: number; url: string }[] {
+  listForJob(kind: 'all' | 'missing-metadata', collectionId?: number): { id: number; url: string }[] {
     const extra = kind === 'missing-metadata' ? 'AND signals IS NULL' : ''
-    return this.all(`SELECT b.id, b.url FROM bookmarks b WHERE deleted_at IS NULL AND ${NOT_ARCHIVED} ${extra} ORDER BY id`).map((r) => ({
+    // A job over one collection covers everything below it as well. Nothing is skipped for being archived:
+    // the collection was named on purpose, and it may be one inside the Archive.
+    const where =
+      collectionId === undefined
+        ? NOT_ARCHIVED
+        : `b.collection_id IN (
+             WITH RECURSIVE sub(id) AS (
+               SELECT ? UNION ALL SELECT c.id FROM collections c JOIN sub ON c.parent_id = sub.id
+             ) SELECT id FROM sub)`
+    const params: SqlValue[] = collectionId === undefined ? [] : [collectionId]
+    return this.all(`SELECT b.id, b.url FROM bookmarks b WHERE deleted_at IS NULL AND ${where} ${extra} ORDER BY id`, ...params).map((r) => ({
       id: Number(r.id),
       url: String(r.url)
     }))

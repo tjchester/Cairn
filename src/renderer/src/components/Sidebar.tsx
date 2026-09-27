@@ -82,6 +82,8 @@ function CollectionNode({ node, depth, totals, inArchive = false }: { node: Tree
 
   const menu = (e: React.MouseEvent): void => {
     e.preventDefault()
+    const total = totals.get(collection.id) ?? 0 // this collection and its sub-collections
+    const jobSuffix = total > 0 ? ' (' + total.toLocaleString('en-US') + ')' : ''
     const items: ContextItem[] = [
       { label: 'New sub-collection…', icon: 'addFolder', onClick: () => void s.createCollection(collection.id) },
       { label: 'Rename…', icon: 'edit', onClick: () => void s.renameCollection(collection.id) },
@@ -92,6 +94,11 @@ function CollectionNode({ node, depth, totals, inArchive = false }: { node: Tree
               ? { label: 'Restore from Archive', icon: 'undo' as const, onClick: () => void s.restoreCollection(collection.id) }
               : { label: 'Send to Archive…', icon: 'archive' as const, onClick: () => void s.archiveCollection(collection.id) }
           ]),
+      { separator: true },
+      // Both cover this collection and everything below it, and go through the same paced, backing-off queue
+      // as the whole-library versions in Tools.
+      { label: 'Refresh details' + jobSuffix, icon: 'refresh', onClick: () => void s.startCollectionJob('fetch-metadata', collection.id, total) },
+      { label: 'Check links' + jobSuffix, icon: 'link', onClick: () => void s.startCollectionJob('check-links', collection.id, total) },
       { separator: true },
       ...COLLECTION_COLORS.map<ContextItem>(({ name, value }) => ({
         label: name,

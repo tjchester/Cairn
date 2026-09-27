@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { JobRunner, type JobDeps, type JobOptions } from '../src/main/services/jobs'
-import type { LinkAttempt, MetadataResult } from '../src/main/services/metadata'
+import { EMPTY_SIGNALS, type LinkAttempt, type MetadataResult } from '../src/main/services/metadata'
 import { DEFAULT_TAGGING, type JobProgress, type TaggingMode } from '../src/shared/types'
 import { TaggingService } from '../src/main/tagging/service'
 import type { LlmClient, LlmInput } from '../src/main/tagging/llm'
@@ -338,6 +338,13 @@ describe('fetch-details job', () => {
     expect(repo.getBookmark(down.id)).toMatchObject({ title: 'down.example', coverUrl: null })
     expect(calls['down.example']).toBe(3) // tried three times, then left for a later run
     expect(last.summary).toBe('2 bookmarks refreshed, 1 returned an error page, 1 could not be reached (run it again later)')
+
+    // The answers settle the links too, exactly as a link check would.
+    expect(repo.getBookmark(good.id)).toMatchObject({ status: 'ok', httpStatus: 200 })
+    expect(repo.getBookmark(flaky.id)).toMatchObject({ status: 'ok', httpStatus: 200 }) // 503 first, then fine
+    expect(repo.getBookmark(gone.id)).toMatchObject({ status: 'broken', httpStatus: 404 })
+    expect(repo.getBookmark(down.id)?.status).toBe('unknown') // never answered: nothing to record
+
     // "Missing" now means "never successfully fetched": only the unreachable site is asked again next time.
     expect(repo.getSignals(gone.id)).not.toBeNull()
     expect(repo.getSignals(down.id)).toBeNull()
@@ -362,6 +369,90 @@ describe('fetch-details job', () => {
     expect(last.summary).toBe('5 bookmarks refreshed')
     expect(events.some((e) => e.paused)).toBe(true)
     expect(repo.allActiveBookmarks().every((b) => b.coverUrl !== null)).toBe(true)
+  })
+})
+
+describe('a job over one collection', () => {
+  const meta = (over: Partial<MetadataResult> = {}): MetadataResult => ({
+    title: 'A page',
+    excerpt: '',
+    coverUrl: null,
+    faviconUrl: null,
+    finalUrl: 'https://x.example/',
+    status: 200,
+    retryAfterMs: null,
+    ...over
+  })
+
+  it('checks that collection and everything below it, and nothing else', async () => {
+    const seen: string[] = []
+    const { repo, events, runner } = setup({
+      attemptLink: async (url) => {
+        seen.push(url)
+        return ok
+      }
+    })
+    const cooking = repo.createCollection({ name: 'Cooking' })
+    const baking = repo.createCollection({ name: 'Baking', parentId: cooking.id })
+    repo.createBookmark({ url: 'https://a.example/', collectionId: cooking.id })
+    repo.createBookmark({ url: 'https://b.example/', collectionId: baking.id })
+    const outside = repo.createBookmark({ url: 'https://c.example/' })
+
+    runner.start('check-links', { collectionId: cooking.id })
+    const last = await finish(events)
+
+    expect(seen.sort()).toEqual(['https://a.example/', 'https://b.example/'])
+    expect(last).toMatchObject({ total: 2, summary: '0 broken, 2 working, 0 inconclusive' })
+    expect(events.some((e) => e.note?.includes('Cooking'))).toBe(true) // the panel says what it is covering
+    expect(repo.getBookmark(outside.id)?.status).toBe('unknown')
+  })
+
+  it('refreshes every page in it, not only the ones never fetched', async () => {
+    const seen: string[] = []
+    const { repo, events, runner } = setup({
+      fetchMetadata: async (url) => {
+        seen.push(url)
+        return meta({ title: 'Fetched' })
+      }
+    })
+    const cooking = repo.createCollection({ name: 'Cooking' })
+    const known = repo.createBookmark({ url: 'https://known.example/', collectionId: cooking.id })
+    repo.createBookmark({ url: 'https://new.example/', collectionId: cooking.id })
+    repo.setSignals(known.id, EMPTY_SIGNALS) // already fetched once: the library-wide job would pass it by
+
+    expect(repo.listForJob('missing-metadata').map((b) => b.url)).toEqual(['https://new.example/'])
+    runner.start('fetch-metadata', { collectionId: cooking.id })
+    await finish(events)
+
+    expect(seen.sort()).toEqual(['https://known.example/', 'https://new.example/'])
+    expect(repo.getBookmark(known.id)).toMatchObject({ status: 'ok', httpStatus: 200 })
+  })
+
+  it('reaches inside the Archive when that is the collection you picked', async () => {
+    const seen: string[] = []
+    const { repo, events, runner } = setup({
+      attemptLink: async (url) => {
+        seen.push(url)
+        return ok
+      }
+    })
+    const old = repo.createBookmark({ url: 'https://old.example/' })
+    repo.archiveBookmarks([old.id])
+    const archive = repo.listCollections().find((c) => c.role === 'archive')
+    expect(repo.listForJob('all')).toEqual([]) // a whole-library run leaves the Archive alone
+
+    runner.start('check-links', { collectionId: archive?.id ?? 0 })
+    await finish(events)
+    expect(seen).toEqual(['https://old.example/'])
+    expect(repo.getBookmark(old.id)?.status).toBe('ok')
+  })
+
+  it('says so, instead of running, when the collection holds nothing', async () => {
+    const { repo, events, runner } = setup({ attemptLink: async () => ok })
+    const empty = repo.createCollection({ name: 'Empty' })
+    runner.start('check-links', { collectionId: empty.id })
+    const last = await finish(events)
+    expect(last).toMatchObject({ total: 0, done: 0, summary: '0 broken, 0 working, 0 inconclusive' })
   })
 })
 

@@ -1044,6 +1044,51 @@ describe('Cairn (real app)', () => {
     await page.waitForSelector('.bm')
   })
 
+  it('checks the links, or refreshes the details, of one collection from its menu', async () => {
+    await cairn(async (api) => {
+      const garden = await api.collections.create({ name: 'Gardening' })
+      const seeds = await api.collections.create({ name: 'Seeds', parentId: garden.id })
+      await api.bookmarks.create({ url: 'https://garden.example/tools', title: 'Garden tools', collectionId: garden.id })
+      await api.bookmarks.create({ url: 'https://garden.example/seeds', title: 'Seed catalogue', collectionId: seeds.id })
+      return true
+    })
+    await page.reload()
+    await page.waitForSelector('.bm')
+
+    // Both items say how many bookmarks they cover: this collection plus everything below it.
+    await page.locator('.nav-item', { hasText: 'Gardening' }).first().click({ button: 'right' })
+    await expect(page.getByRole('menuitem', { name: 'Refresh details (2)' })).toBeVisible()
+    await expect(page.getByRole('menuitem', { name: 'Check links (2)' })).toBeVisible()
+    await shot('32-collection-menu-jobs')
+    await page.keyboard.press('Escape')
+
+    // The job the menu starts really runs, over that collection alone, and can be stopped.
+    const started = await cairn(async (api) => {
+      const garden = (await api.collections.list()).find((c) => c.name === 'Gardening')
+      const id = garden ? await api.tools.startJob('check-links', { collectionId: garden.id }) : null
+      if (id) await api.tools.cancelJob(id)
+      return id !== null
+    })
+    expect(started).toBe(true)
+    await expect(page.getByText(/Link check (cancelled|finished)/)).toBeVisible({ timeout: 30_000 })
+
+    await cairn(async (api) => {
+      const all = await api.collections.list()
+      const garden = all.find((c) => c.name === 'Gardening')
+      const seeds = all.find((c) => c.name === 'Seeds')
+      if (garden) {
+        const ids = await api.bookmarks.matchingIds({ scope: { kind: 'collection', id: garden.id } })
+        await api.bookmarks.trash(ids)
+        await api.bookmarks.purge(ids)
+      }
+      if (seeds) await api.collections.remove(seeds.id)
+      if (garden) await api.collections.remove(garden.id)
+      return true
+    })
+    await page.reload()
+    await page.waitForSelector('.bm')
+  })
+
   it('paints the colour scheme you pick, in light and in dark', async () => {
     const bg = () => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg').trim())
     const scheme = () => page.evaluate(() => document.documentElement.dataset.scheme + '/' + document.documentElement.dataset.mode)

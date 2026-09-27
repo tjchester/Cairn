@@ -312,6 +312,11 @@ export interface StartJobOptions {
   /** Auto-tag jobs: which bookmarks to consider (default: those without any tags). */
   scope?: AutoTagScope
   ids?: number[]
+  /**
+   * Link checks and detail fetches: only the bookmarks in this collection and in everything below it
+   * (default: the whole library). Details are then fetched for all of them, not only the ones never fetched.
+   */
+  collectionId?: number
   useLlm?: boolean
   /** With the model: go over bookmarks it already classified again (by default they are skipped). */
   redo?: boolean

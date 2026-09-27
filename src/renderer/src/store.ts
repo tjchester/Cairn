@@ -23,6 +23,8 @@ import { errorMessage, sameScope } from './util'
 const api = window.cairn
 const PAGE_SIZE = 100
 const MAX_DEPTH = 1000
+/** Above this many bookmarks, a collection-wide link check or refresh asks first: it means that many requests. */
+const BULK_JOB_CONFIRM_AT = 100
 
 export interface ContextItem {
   label?: string
@@ -131,6 +133,8 @@ interface Store {
   importFile(): Promise<void>
   exportFile(format: ExportFormat): Promise<void>
   startJob(kind: JobKind, options?: StartJobOptions): Promise<void>
+  /** Checks the links, or fetches the details, of one collection and everything below it. */
+  startCollectionJob(kind: 'check-links' | 'fetch-metadata', collectionId: number, count: number): Promise<void>
   cancelJob(): Promise<void>
   onJobProgress(progress: JobProgress): void
 
@@ -518,6 +522,8 @@ export const useStore = create<Store>((set, get) => {
       } catch (error) {
         get().dismissToast(pending)
         get().toast(errorMessage(error), 'error')
+        // The attempt still settles whether the link works (a 404 marks it broken), so show that.
+        await get().refreshAll()
         return null
       }
     },
@@ -650,6 +656,36 @@ export const useStore = create<Store>((set, get) => {
     async startJob(kind, options) {
       const id = await guard(() => api.tools.startJob(kind, options))
       if (id === null) get().toast('Another task is already running', 'info')
+    },
+
+    async startCollectionJob(kind, collectionId, count) {
+      const name = get().collections.find((c) => c.id === collectionId)?.name ?? 'this collection'
+      const checking = kind === 'check-links'
+      if (count === 0) {
+        get().toast('"' + name + '" holds no bookmarks', 'info')
+        return
+      }
+      // These contact every site involved, so a large collection is worth a moment's thought first.
+      if (count > BULK_JOB_CONFIRM_AT) {
+        const yes = await get().confirm({
+          title: (checking ? 'Check ' : 'Refresh ') + plural(count, 'bookmark') + ' in "' + name + '"?',
+          message:
+            'This visits ' +
+            (checking ? 'every one of those links' : 'every one of those pages') +
+            ', including the ones in its sub-collections. Requests are spaced out to be polite, so it may take a while; you can stop it at any time from Tools.',
+          confirmLabel: checking ? 'Check links' : 'Refresh details'
+        })
+        if (!yes) return
+      }
+      const id = await guard(() => api.tools.startJob(kind, { collectionId }))
+      if (id === null) {
+        get().toast('Another task is already running', 'info')
+        return
+      }
+      get().toast((checking ? 'Checking ' : 'Refreshing ') + plural(count, 'bookmark') + ' in "' + name + '"…', 'info', {
+        label: 'Progress',
+        onClick: () => get().openDialog({ type: 'tools' })
+      })
     },
 
     async cancelJob() {

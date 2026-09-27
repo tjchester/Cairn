@@ -37,7 +37,35 @@ describe('refreshBookmarkMetadata (the single-bookmark Refresh button)', () => {
         new RegExp('would not let the app read this page \\(HTTP ' + status + '\\).*browser still works')
       )
     }
-    expect(repo.getBookmark(b.id)).toMatchObject({ title: 'A profile', status: 'unknown' }) // nothing was changed
+    // Nothing about the bookmark itself changed, and the link is recorded as working: the site answered, it
+    // just would not be read by a program.
+    expect(repo.getBookmark(b.id)).toMatchObject({ title: 'A profile', status: 'ok', httpStatus: 999 })
+  })
+
+  it('records what the answer says about the link, exactly as a link check would', async () => {
+    const repo = makeRepo()
+    const b = repo.createBookmark({ url: 'https://x.example/' })
+
+    await refreshBookmarkMetadata(repo, b.id, async () => meta())
+    expect(repo.getBookmark(b.id)).toMatchObject({ status: 'ok', httpStatus: 200 })
+    expect(repo.getBookmark(b.id)?.lastCheckedAt).not.toBeNull()
+
+    await expect(refreshBookmarkMetadata(repo, b.id, async () => meta({ status: 404 }))).rejects.toThrow()
+    expect(repo.getBookmark(b.id)).toMatchObject({ status: 'broken', httpStatus: 404 })
+
+    // A temporary fault settles nothing, so what we knew before stands.
+    for (const status of [429, 500, 503]) {
+      await expect(refreshBookmarkMetadata(repo, b.id, async () => meta({ status }))).rejects.toThrow()
+      expect(repo.getBookmark(b.id)).toMatchObject({ status: 'broken', httpStatus: 404 })
+    }
+    // Nor does a site that cannot be reached at all: that may be our own connection.
+    const unreachable = Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('x'), { code: 'ENOTFOUND' }) })
+    await expect(refreshBookmarkMetadata(repo, b.id, async () => Promise.reject(unreachable))).rejects.toThrow()
+    expect(repo.getBookmark(b.id)).toMatchObject({ status: 'broken', httpStatus: 404 })
+
+    // ...and a page that comes back to life is no longer broken.
+    await refreshBookmarkMetadata(repo, b.id, async () => meta())
+    expect(repo.getBookmark(b.id)).toMatchObject({ status: 'ok', httpStatus: 200 })
   })
 
   it.each([

@@ -37,7 +37,8 @@ Raindrop.io. It shares no code or assets with them and is not affiliated with an
   (`utm_*`, `?ref=`, `fbclid`, `srsltid`, `si`, …), so one page saved from two places is one bookmark. The same comparison decides what an
   import skips and warns you when you add something you already have.
 - **Broken-link checker and "fetch missing details"** – background jobs with progress and cancel that are polite and
-  resilient (see *Bulk requests* below).
+  resilient (see *Bulk requests* below). Run them over everything from *Tools*, or over one collection and its
+  sub-collections from its right-click menu.
 - **Trash with undo**, multi-select and bulk actions, favorites, notes, keyboard shortcuts (press `Ctrl/⌘ + /`).
 - **Seven colour schemes** (Cairn, Slate, Ocean, Forest, Sand, Violet, High contrast), each with a light and a dark
   version; *Match system / Light / Dark* still chooses which one you see. Every palette is checked against the WCAG AA
@@ -111,6 +112,11 @@ tests/                 unit tests + Playwright end-to-end test
 
 ### Bulk requests (link check, fetch details)
 
+Both jobs run from *Tools* over the whole library, and from a collection's right-click menu over that collection and
+everything below it (*Refresh details* / *Check links*, each showing how many bookmarks it covers; above 100 it asks
+first). A collection-wide *Refresh details* fetches every page in it, not only the ones never fetched. Whichever way
+one is started it is the same queue, with the same pacing, backoff and cancel button, and only one runs at a time.
+
 Visiting thousands of sites is where things go wrong, so the jobs are built to cope:
 
 - **Spread out, not in bursts** – bookmarks are shuffled so each site's links are spread over the whole run (an import keeps a
@@ -126,6 +132,10 @@ Visiting thousands of sites is where things go wrong, so the jobs are built to c
   connection"), probes with backoff, and resumes by itself; that time does not use up retries.
 - **"Broken" means broken** – only a 404/410-style answer, or a host that doesn't exist / refuses connections on every
   attempt *while the internet is confirmed to be working*. Timeouts, TLS problems and rate limits never mark a link broken.
+- **Fetching details judges the link too** – a page that answers has told us as much as a link check would, so
+  *Refresh details* (one bookmark, or a whole collection) records the same verdict: the page loaded → working,
+  404/410 → broken, a site that only refuses to be read by a program (401, 403, 405, 406, 451, 999) → working. A
+  temporary fault or no answer at all decides nothing and leaves the previous status alone.
 
 ## The Archive
 
@@ -138,7 +148,8 @@ Archive itself. It is made the first time you use it and sits at the foot of the
   puts things back where they came from, rebuilding the path in the same way.
 - **It stays out of the way.** Archived bookmarks are left out of the lists, searches, counts, the tag list, the
   duplicate finder, *Check links*, *Fetch missing details* and auto-tagging. They appear when you look inside the
-  Archive, search `is:archived`, or press the archive button beside the search box.
+  Archive, search `is:archived`, or press the archive button beside the search box — and a link check or refresh
+  aimed at a collection *inside* the Archive does cover it, since you named that collection yourself.
 - **The Trash is the exception:** it shows everything you deleted, wherever it was kept.
 - **Exports** leave the Archive out unless you say otherwise (Cairn asks). A **JSON backup always holds everything**,
   archive and all, and restoring one brings the Archive back as the Archive.

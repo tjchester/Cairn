@@ -83,6 +83,7 @@ const bulkPatch = z.object({
 const startJobOptions = z.object({
   scope: z.enum(['untagged', 'all', 'ids']).optional(),
   ids: ids.optional(),
+  collectionId: id.optional(),
   useLlm: z.boolean().optional(),
   redo: z.boolean().optional()
 })
