@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { runPool } from '../src/main/services/jobs'
-import { attemptLink, isTransientStatus, ORIGINAL_STATUS_HEADER, statusOf, classifyHttpStatus, fetchMetadata, parseMetadata, probeConnectivity, type ProbeResult } from '../src/main/services/metadata'
+import { attemptLink, isTransientStatus, mendReply, ORIGINAL_STATUS_HEADER, statusOf, classifyHttpStatus, fetchMetadata, parseMetadata, probeConnectivity, type ProbeResult } from '../src/main/services/metadata'
 
 const PAGE = `<!doctype html><html><head>
 <meta charset="utf-8">
@@ -114,11 +114,29 @@ describe('fetchMetadata', () => {
   })
 })
 
-describe('a status outside 200-599 (LinkedIn answers 999)', () => {
+describe('replies the network stack cannot build (LinkedIn answers 999)', () => {
   // A reply may only carry 200 to 599, so the main process brings an odd status into range as it arrives and puts the
   // real number in a header. Everything downstream reads that header, so the site's own number is what is reported.
   const odd = (code: number, body: string | null = null) =>
     new Response(body, { status: 599, headers: { [ORIGINAL_STATUS_HEADER]: String(code), 'content-type': 'text/html' } })
+
+  it('is brought into range as the reply arrives, and ordinary replies are left alone', () => {
+    const headers = { 'content-type': ['text/html'] }
+    expect(mendReply({ statusLine: 'HTTP/1.1 200 OK', responseHeaders: headers })).toEqual({})
+    expect(mendReply({ statusLine: 'HTTP/1.1 999 Request denied', responseHeaders: headers })).toEqual({
+      statusLine: 'HTTP/1.1 599 Unusual Status',
+      responseHeaders: { 'content-type': ['text/html'], [ORIGINAL_STATUS_HEADER]: ['999'] }
+    })
+  })
+
+  it('drops headers the network stack cannot hold (a character above U+00FF), keeping the rest', () => {
+    // A header holding "⛄" made building the reply throw: the lookup hung until it timed out.
+    const mended = mendReply({
+      statusLine: 'HTTP/1.1 200 OK',
+      responseHeaders: { 'content-type': ['text/html'], 'x-weird': ['⛄ hi'], 'set-cookie': ['a=1', 'b=⛄'], 'x-latin': ['café'] }
+    })
+    expect(mended).toEqual({ responseHeaders: { 'content-type': ['text/html'], 'set-cookie': ['a=1'], 'x-latin': ['café'] } })
+  })
 
   it('reads the real status back', () => {
     expect(statusOf(odd(999))).toBe(999)

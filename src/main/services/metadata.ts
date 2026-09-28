@@ -34,6 +34,30 @@ const appFetch = (): FetchLike => networkFetch ?? fetch
  */
 export const ORIGINAL_STATUS_HEADER = 'x-cairn-original-status'
 
+/**
+ * Mends a reply as it arrives, before the network stack builds a Response from it: building one throws, and the request
+ * then never finishes, if the status is outside 200–599 (some sites answer bots with 999; the real number is kept in
+ * ORIGINAL_STATUS_HEADER) or if a header holds a character above U+00FF (a site sending an emoji, say). Such headers
+ * are dropped: nothing we read needs them. Returns what to change, or `{}` when the reply is fine as it is.
+ */
+export function mendReply(details: {
+  statusLine?: string
+  responseHeaders?: Record<string, string[]>
+}): { statusLine?: string; responseHeaders?: Record<string, string[]> } {
+  const code = Number(/^\S+\s+(\d+)/.exec(details.statusLine ?? '')?.[1] ?? 0)
+  const badStatus = code < 200 || code > 599
+  const headers: Record<string, string[]> = {}
+  let dropped = false
+  for (const [name, values] of Object.entries(details.responseHeaders ?? {})) {
+    const kept = values.filter((value) => [...value].every((ch) => ch.charCodeAt(0) <= 0xff))
+    if (kept.length < values.length) dropped = true
+    if (kept.length > 0) headers[name] = kept
+  }
+  if (!badStatus && !dropped) return {}
+  if (badStatus) headers[ORIGINAL_STATUS_HEADER] = [String(code)]
+  return { ...(badStatus ? { statusLine: 'HTTP/1.1 599 Unusual Status' } : {}), responseHeaders: headers }
+}
+
 /** The status the site really sent. */
 export function statusOf(res: { status: number; headers: { get(name: string): string | null } }): number {
   const original = Number(res.headers.get(ORIGINAL_STATUS_HEADER))

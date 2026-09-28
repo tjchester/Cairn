@@ -11,7 +11,7 @@ import { applyTheme, readSettings, registerIpc } from './ipc'
 import { buildMenu, focusedOrFirstWindow } from './menu'
 import { JobRunner } from './services/jobs'
 import { createFileLogger } from './services/logger'
-import { ORIGINAL_STATUS_HEADER, useNetworkStack } from './services/metadata'
+import { mendReply, useNetworkStack } from './services/metadata'
 import { TaggingService } from './tagging/service'
 import { createMainWindow, isTrustedUrl, showLegalDocs } from './window'
 
@@ -59,17 +59,9 @@ if (!app.requestSingleInstanceLock()) {
     // as an HTTP 403 and reads like a dead link. The session is its own and is not written to disk, so cookies those
     // pages set are forgotten when the app closes.
     const pageSession = session.fromPartition('cairn-fetch')
-    // A reply may only carry a status from 200 to 599. Some sites answer what they take for a bot with 999 (LinkedIn
-    // does), and building a reply with that throws deep inside the network stack: the app showed a JavaScript error
-    // and the request never finished. Bring such a status into range here, keeping the real number in a header.
-    pageSession.webRequest.onHeadersReceived((details, callback) => {
-      const code = Number(/^\S+\s+(\d+)/.exec(details.statusLine ?? '')?.[1] ?? 0)
-      if (code >= 200 && code <= 599) return callback({})
-      callback({
-        statusLine: 'HTTP/1.1 599 Unusual Status',
-        responseHeaders: { ...details.responseHeaders, [ORIGINAL_STATUS_HEADER]: [String(code)] }
-      })
-    })
+    // Some replies make the network stack throw as it builds them (a status like LinkedIn's 999, a header holding an
+    // emoji): the app logged a JavaScript error and the request never finished. Mend them as they arrive.
+    pageSession.webRequest.onHeadersReceived((details, callback) => callback(mendReply(details)))
     useNetworkStack((input, init) => pageSession.fetch(String(input), init))
 
     const repo = new Repo(openDatabase(join(app.getPath('userData'), 'cairn.db')))
