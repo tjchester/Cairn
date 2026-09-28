@@ -7,6 +7,9 @@ export const CAPTURE_PATH = '/capture'
  * works on sites with a strict Content-Security-Policy, from https pages, and in browsers that block requests to
  * local addresses. The page's address, its title and any text you selected (used as the note) are sent; the app
  * looks up the details itself. Browsers percent-decode `javascript:` bookmarks, so the code must not contain "%".
+ *
+ * When no pop-up can be opened (a blocker, or a page whose policy sandboxes it without `allow-popups`, which also
+ * silences alert()), the capture page opens in the same tab instead and goes back to the page once it has saved it.
  */
 export function buildBookmarklet(port: number, key: string): string {
   const base = 'http://127.0.0.1:' + port + CAPTURE_PATH + '?k=' + encodeURIComponent(key)
@@ -17,7 +20,7 @@ export function buildBookmarklet(port: number, key: string): string {
     'var s="";try{s=String(window.getSelection()||"").trim()}catch(e){}',
     'var u=' + JSON.stringify(base) + '+"&url="+c(location.href,2000)+"&title="+c(document.title,300)+(s?"&note="+c(s,1000):"");',
     'var w=window.open(u,"cairn-capture","popup=yes,width=440,height=280");',
-    'if(!w){alert("Cairn: your browser blocked the pop-up window. Allow pop-ups for this site and try again.")}',
+    'if(!w){location.href=u+"&back=1"}',
     '})();'
   ].join('')
   return 'javascript:' + code

@@ -68,7 +68,7 @@ describe('bookmarklet', () => {
     }
     expect(code.startsWith('javascript:')).toBe(true)
     runInNewContext(code.slice('javascript:'.length), context)
-    return { opened, alerts }
+    return { opened, alerts, location: context.location }
   }
 
   it('contains no percent sign (browsers decode javascript: bookmarks before running them)', () => {
@@ -105,9 +105,13 @@ describe('bookmarklet', () => {
     expect(new URL(opened[0]?.url ?? '').searchParams.get('title')).toBe('a'.repeat(299))
   })
 
-  it('tells the user when the browser blocked the pop-up', () => {
-    const { alerts } = run(buildBookmarklet(47821, KEY), { href: 'https://e.com/', title: 'T' }, true)
-    expect(alerts[0]).toMatch(/pop-up/i)
+  it('opens the capture page in the same tab when no pop-up can be opened (e.g. a page sandboxed by its policy)', () => {
+    const { alerts, location } = run(buildBookmarklet(47821, KEY), { href: 'https://e.com/a', title: 'T' }, true)
+    expect(alerts).toHaveLength(0) // a sandboxed page silently drops alert(), so it cannot be relied on
+    const url = new URL(location.href)
+    expect(url.origin + url.pathname).toBe('http://127.0.0.1:47821/capture')
+    expect(url.searchParams.get('url')).toBe('https://e.com/a')
+    expect(url.searchParams.get('back')).toBe('1')
   })
 })
 
@@ -575,6 +579,18 @@ describe('the local API server', () => {
     const again = await get('/capture?k=' + KEY + '&url=' + encodeURIComponent('https://github.com/org/repo'))
     expect(again.text).toContain('Already in Cairn')
     expect(repo.counts().all).toBe(1)
+  })
+
+  it('goes back to the page instead of closing when it was opened in the same tab', async () => {
+    const { get, repo } = await boot('off')
+    const saved = await get('/capture?k=' + KEY + '&back=1&url=' + encodeURIComponent('https://example.com/x'))
+    expect(saved.text).toContain('history.back()')
+    expect(saved.text).not.toContain('window.close')
+    expect(repo.findByUrl('https://example.com/x')).toBeTruthy()
+    const stale = await get('/capture?k=old&back=1&url=' + encodeURIComponent('https://example.com/y'))
+    expect(stale.status).toBe(401)
+    expect(stale.text).toContain('Back to the page')
+    expect(stale.text).not.toContain('setTimeout')
   })
 
   it('escapes whatever a hostile page puts in its title, and locks the page down with a policy', async () => {

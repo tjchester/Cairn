@@ -26,7 +26,8 @@ Notes:
 
 - The bookmarklet opens a pop-up (a plain navigation) instead of calling `fetch()`, so it works on sites with a strict
   Content-Security-Policy, from `https` pages, and in browsers that restrict requests to local addresses.
-  If your browser blocks the pop-up, it tells you; allow pop-ups for that site.
+  If no pop-up can be opened (a pop-up blocker, or a site whose policy sandboxes its pages without `allow-popups`,
+  such as datalust.co), the capture page opens in the same tab and goes back to the page once it has been saved.
 - If Cairn is not running, the pop-up shows the browser's "can't connect" page. Start Cairn and click again.
 - If you change the port or make a new key, copy the bookmarklet again and replace the one in your browser.
 - Tested in Microsoft Edge (Chromium) on `https` pages including one with a strict policy. Firefox and Safari should behave the same

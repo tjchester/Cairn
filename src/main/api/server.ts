@@ -109,7 +109,7 @@ export class ApiServer {
       const failure = error instanceof ApiError ? error : new ApiError(500, 'internal', 'Something went wrong inside Cairn.')
       if (!(error instanceof ApiError)) this.deps.log?.('api-error', { path, message: error instanceof Error ? error.message : String(error) })
       status = failure.status
-      if (path === CAPTURE_PATH) this.sendHtml(res, failure.status, errorPage(failure), failure.headers)
+      if (path === CAPTURE_PATH) this.sendHtml(res, failure.status, { ...errorPage(failure), inPlace: inPlace(req.url) }, failure.headers)
       else this.sendJson(res, failure.status, { error: { code: failure.code, message: failure.message } }, failure.headers)
     }
     this.deps.log?.('api-request', { method: req.method, path, status })
@@ -232,7 +232,7 @@ export class ApiServer {
     const request = parseCapture(queryToBody(url.searchParams))
     this.refuseOwnAddress(request)
     const outcome = this.deps.ingest.capture(request)
-    this.sendHtml(res, 200, savedPage(outcome))
+    this.sendHtml(res, 200, { ...savedPage(outcome), inPlace: inPlace(req.url) })
     return 200
   }
 
@@ -272,6 +272,11 @@ export class ApiServer {
 /** The path of a request for logging: never the query string, which carries the key and page addresses. */
 function safePath(url: string | undefined): string {
   return (url ?? '/').split('?')[0]?.slice(0, 100) ?? '/'
+}
+
+/** Whether the bookmarklet opened the capture page in the page's own tab (`back=1`) because it could not open a pop-up. */
+function inPlace(url: string | undefined): boolean {
+  return new URL(url ?? '/', 'http://127.0.0.1').searchParams.get('back') === '1'
 }
 
 /**

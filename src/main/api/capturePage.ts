@@ -13,6 +13,8 @@ export interface CapturePageModel {
   detail: string
   /** The bookmark's title or address, shown quoted. */
   subject?: string
+  /** Shown in the page's own tab rather than a pop-up: go back to the saved page instead of closing. */
+  inPlace?: boolean
 }
 
 const ICONS = { saved: '✓', exists: '✓', error: '!' } as const
@@ -29,7 +31,12 @@ export function contentSecurityPolicy(nonce: string): string {
 }
 
 export function renderCapturePage(model: CapturePageModel, nonce: string): string {
-  const close = model.kind !== 'error'
+  const done = model.kind !== 'error'
+  const script = done
+    ? 'setTimeout(function(){' + (model.inPlace ? 'history.back()' : 'window.close()') + '},2200)'
+    : model.inPlace
+      ? 'document.getElementById("back").onclick=function(){history.back()}'
+      : ''
   const subject = model.subject ? '<p class="subject">' + escapeHtml(model.subject.slice(0, 200)) + '</p>' : ''
   return (
     '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
@@ -46,13 +53,15 @@ export function renderCapturePage(model: CapturePageModel, nonce: string): strin
     'h1{font-size:18px;margin:10px 0 4px}' +
     '.subject{margin:0 0 6px;font-weight:600;overflow-wrap:anywhere}' +
     '.detail{margin:0;color:var(--muted)}' +
+    'button{margin-top:14px;font:inherit;padding:6px 14px}' +
     '</style></head><body><main class="' + model.kind + '">' +
     '<div class="icon" aria-hidden="true">' + ICONS[model.kind] + '</div>' +
     '<h1>' + escapeHtml(model.heading) + '</h1>' +
     subject +
     '<p class="detail">' + escapeHtml(model.detail) + '</p>' +
+    (!done && model.inPlace ? '<button id="back" type="button">Back to the page</button>' : '') +
     '</main>' +
-    (close ? '<script nonce="' + nonce + '">setTimeout(function(){window.close()},2200)</script>' : '') +
+    (script ? '<script nonce="' + nonce + '">' + script + '</script>' : '') +
     '</body></html>'
   )
 }
