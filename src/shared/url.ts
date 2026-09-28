@@ -20,11 +20,39 @@ const TRACKING_PARAM = new RegExp(
       'pk_campaign', 'pk_kwd', 'pk_source', 'pk_medium', 'piwik_campaign', 'piwik_kwd', 'matomo_campaign', 'matomo_kwd', // Piwik / Matomo
       'at_medium', 'at_campaign', 's_cid', 'sc_channel', 'sc_campaign', 'soc_src', 'soc_trk', // BBC, Adobe, social shares
       'si', 'spm', 'scm', 'share_source', 'share_medium', // share links (YouTube, Spotify, Alibaba)
-      '_ga', '_gl', '__s', 'guccounter', 'guce_referrer', 'guce_referrer_sig'
+      '_ga', '_gl', '__s', 'guccounter', 'guce_referrer', 'guce_referrer_sig',
+      'wt[.]mc_id', 'ftag', 'emcid', 'et_rid', 'et_cid', // Microsoft, CBS (GameSpot, CNET), Salesforce mail campaigns
+      'newsletter_popup', 'doing_wp_cron' // a newsletter prompt, and WordPress running its scheduler on a visit
     ].join('|') +
     ')$',
   'i'
 )
+
+/**
+ * Names that mark where a visitor came from on one site but choose the page on others (`t` is a YouTube timestamp;
+ * on Twitter it is a share token), so they are ignored only on the sites listed. Keys are hosts without `www.`; a
+ * key also covers its subdomains. Amazon uses many country domains, so it is matched by name below.
+ */
+const SITE_TRACKING_PARAMS: Record<string, readonly string[]> = {
+  'twitter.com': ['s', 't'],
+  'x.com': ['s', 't'],
+  'forbes.com': ['sh'],
+  'theregister.com': ['td'],
+  'makeuseof.com': ['pubdate']
+}
+const AMAZON_TRACKING_PARAMS = ['tag', 'linkcode', 'linkid', 'camp', 'creative', 'creativeasin', 'ascsubtag', 'ie']
+const AMAZON_HOST = /(^|\.)amazon\.[a-z.]+$/
+
+function siteTrackingParams(host: string): readonly string[] {
+  if (AMAZON_HOST.test(host)) return AMAZON_TRACKING_PARAMS
+  for (const [site, params] of Object.entries(SITE_TRACKING_PARAMS)) {
+    if (host === site || host.endsWith('.' + site)) return params
+  }
+  return []
+}
+
+/** A folder's own page, which servers also answer at the folder's address: `/docs/index.html` is `/docs/`. */
+const INDEX_PAGE = /\/(index|default)\.(html?|shtml|php|aspx?|jsp)$/i
 
 /**
  * Turns user input into a valid absolute http(s) URL.
@@ -69,17 +97,22 @@ export function domainOf(url: string): string {
 }
 
 /**
- * A normalised key used to detect duplicate bookmarks: scheme, `www.`, fragment, trailing
- * slashes, tracking parameters and query-parameter order are ignored.
+ * A normalised key used to detect duplicate bookmarks: scheme, `www.`, fragment, trailing and repeated slashes, a
+ * folder's index page, tracking parameters and query-parameter order are ignored. On GitHub, whose account and
+ * repository names ignore case, so does the start of the path; so does Amazon's `/ref=…` tracking segment.
  */
 export function urlKey(raw: string): string {
   try {
     const u = new URL(raw)
     const host = u.hostname.toLowerCase().replace(/^www\./, '')
     const port = u.port ? `:${u.port}` : ''
-    const path = u.pathname.replace(/\/+$/, '')
+    let path = u.pathname.replace(/\/{2,}/g, '/').replace(INDEX_PAGE, '')
+    if (AMAZON_HOST.test(host)) path = path.replace(/\/ref=[^/]*$/, '')
+    if (host === 'github.com') path = path.replace(/^(\/[^/]+){1,2}/, (start) => start.toLowerCase())
+    path = path.replace(/\/+$/, '')
+    const siteParams = siteTrackingParams(host)
     const params = [...u.searchParams.entries()]
-      .filter(([key]) => !TRACKING_PARAM.test(key))
+      .filter(([key]) => !TRACKING_PARAM.test(key) && !siteParams.includes(key.toLowerCase()))
       .sort(([ak, av], [bk, bv]) => (ak === bk ? av.localeCompare(bv) : ak.localeCompare(bk)))
     const query = params.length ? `?${new URLSearchParams(params).toString()}` : ''
     return `${host}${port}${path}${query}`
@@ -101,4 +134,24 @@ export function extractUrls(text: string): string[] {
     }
   }
   return out
+}
+
+/** Where a site sends visitors it will not show the page to, or whose page is gone: not a new home for the page. */
+const DEAD_END_PATH = /(^|\/)(log[-_]?in|sign[-_]?in|sign[-_]?up|auth|account|session|404|not[-_]?found|error|gone)(\/|\.|$)/i
+
+/**
+ * The key of the address a link redirects to, when that address is a new home for the same page and not the one the
+ * bookmark already has: `golang.org/ref/spec` now lives at `go.dev/ref/spec`. Null otherwise. A page that is sent to
+ * the site's front page, or to a sign-in or error page, has been removed or hidden rather than moved, and is not
+ * counted: every dead page on a site would otherwise look like a copy of its home page.
+ */
+export function redirectKey(url: string, finalUrl: string | null | undefined): string | null {
+  if (!finalUrl || !isHttpUrl(finalUrl)) return null
+  const key = urlKey(finalUrl)
+  if (key === urlKey(url)) return null
+  const path = (raw: string): string => urlKey(raw).replace(/^[^/?]*/, '').split('?')[0] ?? ''
+  const finalPath = path(finalUrl)
+  if (finalPath === '' && path(url) !== '') return null
+  if (DEAD_END_PATH.test(finalPath)) return null
+  return key
 }

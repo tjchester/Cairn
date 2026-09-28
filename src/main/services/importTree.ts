@@ -107,6 +107,13 @@ export function applyImport(repo: Repo, root: ImportFolder, options: { skipDupli
   return result
 }
 
+/**
+ * The earliest date a bookmark can have: the web is younger. Exports that do not know a date often write 0 (or leave
+ * it out), and 0 read as a date is 1 January 1970; such a date is treated as unknown, so the bookmark is dated when it
+ * is imported.
+ */
+export const EARLIEST_BOOKMARK_DATE = Date.UTC(1991, 0, 1)
+
 export function toIsoDate(value: string | number | undefined | null): string | undefined {
   if (value === undefined || value === null || value === '') return undefined
   let date: Date
@@ -118,6 +125,6 @@ export function toIsoDate(value: string | number | undefined | null): string | u
     date = new Date(String(value))
   }
   const time = date.getTime()
-  if (Number.isNaN(time) || time < 0 || time > Date.now() + 86_400_000 * 365) return undefined
+  if (Number.isNaN(time) || time < EARLIEST_BOOKMARK_DATE || time > Date.now() + 86_400_000 * 365) return undefined
   return date.toISOString()
 }

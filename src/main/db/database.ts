@@ -1,6 +1,7 @@
 import { copyFileSync, existsSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 import { urlKey } from '@shared/url'
+import { EARLIEST_BOOKMARK_DATE } from '../services/importTree'
 
 // Each entry migrates the schema from version N to N + 1 (tracked with PRAGMA user_version): SQL, or a function
 // for the steps that need to look at the data.
@@ -147,8 +148,28 @@ export const MIGRATIONS: Migration[] = [
   -- is left out of the ordinary lists, searches and jobs unless archived items are asked for.
   ALTER TABLE collections ADD COLUMN role TEXT;
   CREATE UNIQUE INDEX idx_collections_role ON collections(role) WHERE role IS NOT NULL;
-  `
+  `,
+  /* v8 */ (db) => {
+    // The key of the address a link redirects to, when it is a new home for the page (see redirectKey): it lets the
+    // duplicate finder see a bookmark for a page that moved next to one saved at the new address.
+    db.exec('ALTER TABLE bookmarks ADD COLUMN final_url_key TEXT')
+    db.exec('CREATE INDEX idx_bookmarks_final_url_key ON bookmarks(final_url_key) WHERE final_url_key IS NOT NULL')
+    repairEpochDates(db)
+    recomputeUrlKeys(db) // the rules gained index pages, repeated slashes, GitHub names and more tracking markers
+  }
 ]
+
+/**
+ * Imports used to read a missing date (written as 0) as 1 January 1970. Such bookmarks sorted as the oldest, so the
+ * duplicate finder kept them over the real ones. The date they were last changed is the nearest thing to when they
+ * arrived.
+ */
+function repairEpochDates(db: DatabaseSync): void {
+  const cutoff = new Date(EARLIEST_BOOKMARK_DATE).toISOString()
+  db.prepare(
+    `UPDATE bookmarks SET created_at = CASE WHEN updated_at >= ? THEN updated_at ELSE ? END WHERE created_at < ?`
+  ).run(cutoff, new Date().toISOString(), cutoff)
+}
 
 /**
  * The key that decides whether two bookmarks are the same page is worked out when a bookmark is saved, so the rows

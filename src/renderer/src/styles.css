@@ -1231,6 +1231,14 @@ kbd {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The address of a copy that differs from the group's first (an index page, a page that moved). */
+.dupe-other-url {
+  max-width: 40%;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* ------------------------------------------------------------ context menu */
 .context-menu {

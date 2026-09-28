@@ -52,6 +52,14 @@ describe('Netscape HTML', () => {
     expect(root.children.some((c) => c.type === 'link' && c.url === 'https://toplevel.example/')).toBe(true)
   })
 
+  it('treats a date of 0 (or anything before the web) as unknown rather than 1970', () => {
+    const root = parseNetscape('<DL><p><DT><A HREF="https://a.example/" ADD_DATE="0">A</A><DT><A HREF="https://b.example/" ADD_DATE="315532800">B</A></DL>')
+    expect(links(root).map((l) => l.createdAt)).toEqual([undefined, undefined])
+    const repo = makeRepo()
+    importText(repo, 'bookmarks.html', '<DL><p><DT><A HREF="https://a.example/" ADD_DATE="0">A</A></DL>')
+    expect(repo.allActiveBookmarks()[0]?.createdAt.startsWith('1970')).toBe(false)
+  })
+
   it('imports into collections and skips duplicates on re-import', () => {
     const repo = makeRepo()
     const first = importText(repo, 'bookmarks.html', BROWSER_EXPORT)

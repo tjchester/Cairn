@@ -218,3 +218,33 @@ describe('schema upgrade (v6 -> v7)', () => {
     expect(existsSync(file + '.v6.bak')).toBe(true)
   })
 })
+
+describe('schema upgrade (v7 -> v8)', () => {
+  it('dates bookmarks imported as 1970 by when they arrived, and works out every key under the new rules', () => {
+    const file = join(dir, 'v7.db')
+    const old = new DatabaseSync(file)
+    old.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;')
+    for (const step of MIGRATIONS.slice(0, 7)) {
+      if (typeof step === 'string') old.exec(step)
+      else step(old)
+    }
+    old.exec('PRAGMA user_version = 7')
+    const add = (id: number, url: string, key: string, created: string, updated: string): void => {
+      old.exec(`INSERT INTO bookmarks (id, url, url_key, title, domain, created_at, updated_at) VALUES (${id}, '${url}', '${key}', 'T', 'x', '${created}', '${updated}')`)
+    }
+    // Keys exactly as the older rules stored them: the index page and the folder were two pages.
+    add(1, 'https://tunnelblick.net/index.html', 'tunnelblick.net/index.html', '2024-04-21T13:20:07.000Z', '2024-04-21T13:20:07.000Z')
+    add(2, 'https://tunnelblick.net/', 'tunnelblick.net', '1970-01-01T00:00:00.000Z', '2026-09-24T00:03:08.586Z')
+    add(3, 'https://example.com/a', 'example.com/a', '1970-01-01T00:00:00.000Z', '1970-01-01T00:00:00.000Z')
+    old.close()
+
+    const db = openDatabase(file)
+    const repo = new Repo(db)
+    expect(repo.getBookmark(2)?.createdAt).toBe('2026-09-24T00:03:08.586Z')
+    expect(repo.getBookmark(3)?.createdAt.startsWith('1970')).toBe(false)
+    expect(repo.getBookmark(1)?.createdAt).toBe('2024-04-21T13:20:07.000Z') // real dates are left alone
+    expect(repo.findDuplicateGroups().map((g) => g.map((b) => b.id))).toEqual([[1, 2]]) // the real one first
+    db.close()
+    expect(existsSync(file + '.v7.bak')).toBe(true)
+  })
+})

@@ -402,6 +402,35 @@ describe('duplicates and metadata', () => {
     expect(repo.findDuplicateGroups()).toHaveLength(0)
   })
 
+  it('groups a page that moved with a bookmark saved at its new address, once its details have been fetched', () => {
+    const repo = makeRepo()
+    const old = repo.createBookmark({ url: 'https://golang.org/ref/spec' })
+    const moved = repo.createBookmark({ url: 'https://go.dev/ref/spec' })
+    const other = repo.createBookmark({ url: 'https://golang.org/doc/' })
+    expect(repo.findDuplicateGroups()).toEqual([])
+    repo.applyMetadata(old.id, { finalUrl: 'https://go.dev/ref/spec' })
+    repo.applyMetadata(moved.id, { finalUrl: 'https://go.dev/ref/spec' }) // no redirect: nothing to remember
+    expect(repo.findDuplicateGroups().map((g) => g.map((b) => b.id))).toEqual([[old.id, moved.id]])
+    // Two old addresses that now lead to one page are one page too, even with no bookmark at the new address.
+    repo.applyMetadata(other.id, { finalUrl: 'https://go.dev/ref/spec/' })
+    expect(repo.findDuplicateGroups().map((g) => g.map((b) => b.id))).toEqual([[old.id, moved.id, other.id]])
+    // Editing the address forgets where the old one led.
+    repo.updateBookmark(other.id, { url: 'https://golang.org/doc/faq' })
+    expect(repo.findDuplicateGroups().map((g) => g.map((b) => b.id))).toEqual([[old.id, moved.id]])
+  })
+
+  it('does not group pages that were sent to the front page or a sign-in page', () => {
+    const repo = makeRepo()
+    const home = repo.createBookmark({ url: 'https://example.com/' })
+    const gone = repo.createBookmark({ url: 'https://example.com/old-article' })
+    const hidden = repo.createBookmark({ url: 'https://example.com/private' })
+    const login = repo.createBookmark({ url: 'https://example.com/login' })
+    repo.applyMetadata(gone.id, { finalUrl: 'https://example.com/' })
+    repo.applyMetadata(hidden.id, { finalUrl: 'https://example.com/login?next=/private' })
+    expect(repo.findDuplicateGroups()).toEqual([])
+    expect([home.id, login.id]).toHaveLength(2)
+  })
+
   it('applies metadata without clobbering user-edited fields', () => {
     const repo = makeRepo()
     const auto = repo.createBookmark({ url: 'https://a.com' })

@@ -606,7 +606,10 @@ function Duplicates(): React.JSX.Element {
       <h3>
         <Icon name="duplicate" /> Duplicate bookmarks
       </h3>
-      <p className="muted">Bookmarks that point to the same page (ignoring http/https, “www”, trailing slashes and tracking parameters).</p>
+      <p className="muted">
+        Bookmarks that point to the same page (ignoring http/https, “www”, trailing slashes, index pages and tracking parameters), or to
+        a page that moved to another’s address. Moves are noticed when a bookmark’s details are fetched.
+      </p>
       {groups === null || scanning ? (
         <p className="muted">Scanning…</p>
       ) : groups.length === 0 ? (
@@ -629,6 +632,7 @@ function Duplicates(): React.JSX.Element {
                     <li key={b.id}>
                       <Favicon src={b.faviconUrl} size={14} />
                       <span className="dupe-title">{b.title}</span>
+                      {b.url !== group[0]?.url && <span className="muted dupe-other-url">{b.url}</span>}
                       <span className="muted">
                         {b.collectionId === null ? 'Unsorted' : (collections.find((c) => c.id === b.collectionId)?.name ?? '')} · {formatDate(b.createdAt)}
                         {i === 0 ? ' · oldest' : ''}

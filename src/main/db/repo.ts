@@ -22,7 +22,7 @@ import type {
   TidyResult
 } from '@shared/types'
 import { buildTree, subtreeCounts } from '@shared/collections'
-import { coerceUrl, domainOf, isHttpUrl, urlKey } from '@shared/url'
+import { coerceUrl, domainOf, isHttpUrl, redirectKey, urlKey } from '@shared/url'
 import { canon, GENERIC_TAGS } from '../tagging/text'
 import { buildSearchClauses, parseSearch, type SqlValue } from './search'
 
@@ -691,6 +691,7 @@ export class Repo {
         if (url !== existing.url) {
           set('url', url)
           set('url_key', urlKey(url))
+          set('final_url_key', null)
           set('domain', domainOf(url))
           set('status', 'unknown')
           set('http_status', null)
@@ -1193,11 +1194,20 @@ export class Repo {
    */
   applyMetadata(
     id: number,
-    meta: { title?: string; excerpt?: string; coverUrl?: string | null; faviconUrl?: string | null; signals?: PageSignals | null }
+    meta: {
+      title?: string
+      excerpt?: string
+      coverUrl?: string | null
+      faviconUrl?: string | null
+      signals?: PageSignals | null
+      /** Where the link led after redirects; remembered when the page has moved, for the duplicate finder. */
+      finalUrl?: string
+    }
   ): Bookmark {
     const existing = this.getBookmark(id)
     if (!existing) throw new Error('Bookmark not found')
     if (meta.signals) this.setSignals(id, meta.signals)
+    if (meta.finalUrl !== undefined) this.run('UPDATE bookmarks SET final_url_key = ? WHERE id = ?', redirectKey(existing.url, meta.finalUrl), id)
     const autoTitle = !existing.title || existing.title === existing.domain || existing.title === existing.url
     const patch: BookmarkPatch = {}
     if (meta.title && autoTitle) patch.title = meta.title
@@ -1211,14 +1221,42 @@ export class Repo {
     this.run('UPDATE bookmarks SET status = ?, http_status = ?, last_checked_at = ? WHERE id = ?', status, httpStatus, new Date().toISOString(), id)
   }
 
-  /** Groups of active bookmarks that point at the same (normalised) URL. */
+  /**
+   * Groups of active bookmarks that point at the same page: the same normalised URL, or a URL that redirects to
+   * another's (a page that moved to a new address). Each group is oldest first; groups are in address order.
+   */
   findDuplicateGroups(): Bookmark[][] {
-    const keys = this.all(
-      `SELECT url_key FROM bookmarks b WHERE deleted_at IS NULL AND ${NOT_ARCHIVED} GROUP BY url_key HAVING COUNT(*) > 1 ORDER BY url_key`
-    ).map((r) => String(r.url_key))
-    return keys.map((key) =>
-      this.all(`${BOOKMARK_SELECT} WHERE b.url_key = ? AND b.deleted_at IS NULL AND ${NOT_ARCHIVED} ORDER BY b.created_at, b.id`, key).map(toBookmark)
-    )
+    const rows = this.all(`SELECT b.id, b.url_key, b.final_url_key FROM bookmarks b WHERE deleted_at IS NULL AND ${NOT_ARCHIVED}`)
+    // Bookmarks that share any key (their own, or where they redirect to) are one page: join them up.
+    const parent = new Map<number, number>()
+    const find = (id: number): number => {
+      let root = id
+      while (parent.get(root) !== root) root = parent.get(root) as number
+      parent.set(id, root)
+      return root
+    }
+    const firstWithKey = new Map<string, number>()
+    for (const row of rows) {
+      const id = Number(row.id)
+      parent.set(id, id)
+      for (const key of [row.url_key, row.final_url_key]) {
+        if (key === null) continue
+        const other = firstWithKey.get(String(key))
+        if (other === undefined) firstWithKey.set(String(key), id)
+        else parent.set(find(id), find(other))
+      }
+    }
+    const members = new Map<number, number[]>()
+    for (const id of parent.keys()) {
+      const root = find(id)
+      members.set(root, [...(members.get(root) ?? []), id])
+    }
+    const groups = [...members.values()]
+      .filter((ids) => ids.length > 1)
+      .map((ids) =>
+        this.all(`${BOOKMARK_SELECT} WHERE b.id IN (${placeholders(ids.length)}) ORDER BY b.created_at, b.id`, ...ids).map(toBookmark)
+      )
+    return groups.sort((a, b) => urlKey(a[0]?.url ?? '').localeCompare(urlKey(b[0]?.url ?? '')))
   }
 
   /**
