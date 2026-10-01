@@ -99,7 +99,11 @@ export function buildMenu({ send, setTheme, showLegal, showLog }: MenuHooks): vo
     },
     {
       label: 'Tools',
-      submenu: [action('Find Duplicates, Check Links…', 'open-tools', 'CmdOrCtrl+Shift+T'), action('Copy Bookmarklet for Your Browser', 'copy-bookmarklet')]
+      submenu: [
+        action('Copy Bookmarklet for Your Browser', 'copy-bookmarklet'),
+        { type: 'separator' },
+        action('Find Duplicates, Check Links…', 'open-tools', 'CmdOrCtrl+Shift+T')
+      ]
     },
     { role: 'windowMenu' },
     {
