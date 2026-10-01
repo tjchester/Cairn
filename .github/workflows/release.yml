@@ -1,0 +1,117 @@
+# Builds Cairn for Windows, macOS and Linux and attaches the installers to a draft GitHub Release.
+#
+# To release: set "version" in package.json, commit, then push a matching tag:
+#   git tag v0.1.0 && git push origin v0.1.0
+# The draft appears under Releases; check it, edit the notes, and publish it by hand.
+#
+# Running the workflow by hand (Actions > Release > Run workflow) builds everything without
+# releasing; the installers are kept as workflow artifacts instead.
+#
+# Builds are unsigned. Windows SmartScreen will warn, and macOS needs right-click > Open the first time.
+# To sign later, add CSC_LINK / CSC_KEY_PASSWORD (and APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD,
+# APPLE_TEAM_ID for notarization) as repository secrets and pass them to the build step.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - name: Tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          expected="v$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "$expected" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version ($expected)."
+            exit 1
+          fi
+
+  # Create the draft once, before the builds start, so the three build jobs all upload into the same
+  # release instead of racing to create one each.
+  draft:
+    needs: check
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; the builds will upload into it."
+          else
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft \
+              --title "Cairn $GITHUB_REF_NAME" --generate-notes
+          fi
+
+  build:
+    needs: [check, draft]
+    # Run after "draft" on a tag, and when "draft" is skipped on a manual run.
+    if: ${{ !failure() && !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            script: dist:win
+            args: ''
+          - os: macos-latest
+            script: dist:mac
+            # The macOS runner is Apple silicon; build Intel too so both kinds of Mac are covered.
+            args: --x64 --arm64
+          - os: ubuntu-latest
+            script: dist:linux
+            args: ''
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Build and package
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No signing certificate yet: don't let electron-builder go looking for one in the keychain.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          publish=never
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then publish=always; fi
+          # The GitHub target is given here rather than in electron-builder.yml so local `npm run dist`
+          # keeps working in a clone with no GitHub remote. It also writes latest*.yml for auto-update.
+          npm run ${{ matrix.script }} -- ${{ matrix.args }} -c.publish.provider=github --publish "$publish"
+      - name: Keep installers as workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cairn-${{ runner.os }}
+          path: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.zip
+            dist/*.AppImage
+            dist/*.deb
+            dist/latest*.yml
+          if-no-files-found: error
+          retention-days: 14
