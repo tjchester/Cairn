@@ -6,6 +6,11 @@
   "main": "./out/main/index.js",
   "author": "Thomas Chester",
   "license": "SEE LICENSE IN LICENSE",
+  "homepage": "https://github.com/tjchester/Cairn#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tjchester/Cairn.git"
+  },
   "private": true,
   "scripts": {
     "dev": "electron-vite dev",
