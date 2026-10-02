@@ -5,7 +5,14 @@
 # The draft appears under Releases; check it, edit the notes, and publish it by hand.
 #
 # Running the workflow by hand (Actions > Release > Run workflow) builds everything without
-# releasing; the installers are kept as workflow artifacts instead.
+# releasing; the installers are kept as workflow artifacts instead, for a few days. (Tag builds don't
+# keep artifacts: the installers are already in the release, and a free account's artifact storage
+# for private repositories is only 500 MB.)
+#
+# Minutes: on a private repository a free account gets 2,000 a month, with macOS counting tenfold and
+# Windows double, so one release costs roughly 150-250 of them. Public repositories are not charged.
+#
+# Actions are pinned to full commit SHAs (the comment gives the release); Dependabot proposes updates.
 #
 # Builds are unsigned. Windows SmartScreen will warn, and macOS needs right-click > Open the first time.
 # To sign later, add CSC_LINK / CSC_KEY_PASSWORD (and APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD,
@@ -18,8 +25,9 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+# Read-only by default; only the jobs that create or upload to the release get write access.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -28,9 +36,15 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # The unit tests never start Electron, so skip downloading its binary.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: npm
@@ -52,6 +66,9 @@ jobs:
     needs: check
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
     steps:
       - name: Create draft release
         env:
@@ -83,9 +100,16 @@ jobs:
             script: dist:linux
             args: ''
     runs-on: ${{ matrix.os }}
+    # A hung build should not burn through the month's minutes.
+    timeout-minutes: 45
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # electron-builder still reads the repository from the remote URL; this only keeps the token out of .git/config.
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: npm
@@ -103,7 +127,9 @@ jobs:
           # keeps working in a clone with no GitHub remote. It also writes latest*.yml for auto-update.
           npm run ${{ matrix.script }} -- ${{ matrix.args }} -c.publish.provider=github --publish "$publish"
       - name: Keep installers as workflow artifacts
-        uses: actions/upload-artifact@v4
+        # Manual runs only: on a tag the installers are already attached to the release.
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: cairn-${{ runner.os }}
           path: |
@@ -114,4 +140,4 @@ jobs:
             dist/*.deb
             dist/latest*.yml
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 5
